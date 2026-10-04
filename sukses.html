@@ -219,7 +219,9 @@
                     throw new Error("Sesi otomatis belum siap. Survei bisa diisi nanti setelah login ke dashboard.");
                 }
                 const res = await API.submitSurvei(alasanTerpilih.join(", "), sumberTerpilih, petaSub[sumberTerpilih] ? selSubSumber.value : "");
-                if (!res.ok) throw new Error(res.pesan);
+                // "Sudah pernah mengisi" = jawaban SUDAH tersimpan (mis. kiriman sebelumnya
+                // sukses di server tapi balasannya 404/terputus) -> perlakukan sebagai berhasil.
+                if (!res.ok && !/sudah pernah/i.test(res.pesan || "")) throw new Error(res.pesan);
                 area.innerHTML = `<div class="kartu"><div class="catatan hijau" style="margin:0;">${UI.ikon("cek")}<span>Terima kasih, survei berhasil dikirim.</span></div></div>`;
             } catch (err) {
                 errorBox.textContent = err.message || "Gagal mengirim survei.";

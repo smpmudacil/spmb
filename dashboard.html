@@ -43,31 +43,43 @@
     async function mulai() {
         if (!API.sesiInfo().adaToken) { window.location.href = "login.html"; return; }
 
-        try {
-            const [resVerify, resProfil, resConfig] = await Promise.all([
-                API.verifyToken(), API.getProfile(), API.getConfig(),
-            ]);
-
-            if (!resVerify.ok || resVerify.data.role !== "pendaftar") {
-                window.location.href = "login.html";
-                return;
-            }
-            if (!resProfil.ok) {
-                tampilkanErrorFatal(resProfil.pesan || "Gagal memuat data pendaftar.");
-                return;
-            }
+        // LAZY + SWR: verifyToken DIBUANG (getProfile sendiri menolak sesi tidak
+        // sah -> 1 panggilan server lebih sedikit). Kunjungan berikutnya
+        // menampilkan data tersimpan SEKETIKA, data terbaru menyusul di belakang.
+        let sudahTampil = false;
+        function terapkan(resProfil) {
+            if (!resProfil || !resProfil.ok) return false;
             profil = resProfil.data.pendaftar;
             ringkasan = resProfil.data.ringkasanBayar || null;
-            cfgPublik = (resConfig.ok && resConfig.data) ? resConfig.data : {};
-            if (cfgPublik.NAMA_APLIKASI) document.getElementById("txtNamaAplikasi").innerHTML = cfgPublik.NAMA_APLIKASI;
-            if (cfgPublik.NAMA_SEKOLAH) document.getElementById("txtNamaSekolah").textContent = cfgPublik.NAMA_SEKOLAH;
-
-            document.getElementById("areaMuat").style.display = "none";
-            document.getElementById("areaKonten").style.display = "block";
-            render();
-        } catch (err) {
-            tampilkanErrorFatal("Error jaringan: " + err.message);
+            return true;
         }
+        try {
+            const cfgPromise = API.getConfig();
+            await API.swr("profil", function () { return API.getProfile(); }, async function (res, dariCache) {
+                if (!terapkan(res)) {
+                    if (!sudahTampil) {
+                        const salahSesi = /sesi|login/i.test((res && res.pesan) || "");
+                        if (salahSesi) { API.hapusSesiLokal(); window.location.href = "login.html"; return; }
+                        tampilkanErrorFatal((res && res.pesan) || "Gagal memuat data pendaftar.");
+                    }
+                    return;
+                }
+                const resConfig = await cfgPromise;
+                cfgPublik = (resConfig.ok && resConfig.data) ? resConfig.data : {};
+                if (cfgPublik.NAMA_APLIKASI) document.getElementById("txtNamaAplikasi").innerHTML = cfgPublik.NAMA_APLIKASI;
+                if (cfgPublik.NAMA_SEKOLAH) document.getElementById("txtNamaSekolah").textContent = cfgPublik.NAMA_SEKOLAH;
+                document.getElementById("areaMuat").style.display = "none";
+                document.getElementById("areaKonten").style.display = "block";
+                // Data segar tiba setelah tampilan awal: segarkan hanya tab yang tidak
+                // sedang berisi form (supaya ketikan pengguna tidak hilang).
+                if (!sudahTampil || tabAktif === "status" || tabAktif === "data") { sudahTampil = true; render(); }
+                else { sudahTampil = true; }
+            });
+        } catch (err) {
+            if (!sudahTampil) tampilkanErrorFatal("Error jaringan: " + err.message);
+        }
+        // Pengumuman (titik merah lonceng) dimuat SETELAH halaman tampil, tidak menghambat.
+        setTimeout(cekPengumumanBelumDibaca, 300);
     }
 
     function tampilkanErrorFatal(pesan) {
@@ -125,7 +137,7 @@
 
         document.getElementById("btnKeluar").addEventListener("click", keluar);
         document.getElementById("btnLonceng").addEventListener("click", bukaPengumuman);
-        cekPengumumanBelumDibaca();
+        if (adaPengumumanBaru) { const t0 = document.getElementById("titikLonceng"); if (t0) t0.style.display = "block"; }
         document.querySelectorAll(".tab-btn").forEach(function (btn) {
             btn.addEventListener("click", function () { tabAktif = btn.getAttribute("data-tab"); render(); });
         });
@@ -160,14 +172,17 @@
     function idPengumumanDibaca() {
         try { return JSON.parse(localStorage.getItem(KUNCI_PENGUMUMAN_DIBACA) || "[]"); } catch (e) { return []; }
     }
+    let adaPengumumanBaru = false;
     async function cekPengumumanBelumDibaca() {
         try {
-            const res = await API.getPengumuman(profil && profil.GELOMBANG);
-            const rows = (res.ok && res.data && res.data.pengumuman) ? res.data.pengumuman : [];
-            const dibaca = idPengumumanDibaca();
-            const adaBaru = rows.some(function (r) { return dibaca.indexOf(r.PENGUMUMAN_ID) === -1; });
-            const titik = document.getElementById("titikLonceng");
-            if (titik) titik.style.display = adaBaru ? "block" : "none";
+            // SWR: titik merah muncul seketika dari data tersimpan, lalu dikoreksi data segar.
+            await API.swr("pengumuman_" + (profil && profil.GELOMBANG || ""), function () { return API.getPengumuman(profil && profil.GELOMBANG); }, function (res) {
+                const rows = (res && res.ok && res.data && res.data.pengumuman) ? res.data.pengumuman : [];
+                const dibaca = idPengumumanDibaca();
+                adaPengumumanBaru = rows.some(function (r) { return dibaca.indexOf(r.PENGUMUMAN_ID) === -1; });
+                const titik = document.getElementById("titikLonceng");
+                if (titik) titik.style.display = adaPengumumanBaru ? "block" : "none";
+            });
         } catch (err) { /* diamkan, ikon lonceng tetap tampil tanpa badge */ }
     }
     async function bukaPengumuman() {
@@ -182,10 +197,10 @@
         latar.querySelector("#btnTutupPengumuman").addEventListener("click", function () { latar.remove(); });
         latar.addEventListener("click", function (e) { if (e.target === latar) latar.remove(); });
 
-        try {
-            const res = await API.getPengumuman(profil && profil.GELOMBANG);
-            const rows = (res.ok && res.data && res.data.pengumuman) ? res.data.pengumuman : [];
+        function gambar(res) {
+            const rows = (res && res.ok && res.data && res.data.pengumuman) ? res.data.pengumuman : [];
             const isi = document.getElementById("isiModalPengumuman");
+            if (!isi) return;
             isi.innerHTML = rows.length ? rows.map(function (r) {
                 return `<div class="kartu" style="margin-bottom:8px;">
                     <div style="font-weight:800;">${UI.escapeHtml(r.JUDUL)}</div>
@@ -193,15 +208,20 @@
                     ${r.LINK_WA ? `<a href="${UI.escapeHtml(r.LINK_WA)}" target="_blank" rel="noreferrer" class="tombol utama blok" style="margin-top:6px;">${UI.ikon("panah")} Buka Link</a>` : ""}
                 </div>`;
             }).join("") : '<div class="teks-lembut" style="text-align:center;">Belum ada pengumuman.</div>';
-
             // Tandai semua sudah dibaca begitu modal dibuka
             const sudah = idPengumumanDibaca();
             rows.forEach(function (r) { if (sudah.indexOf(r.PENGUMUMAN_ID) === -1) sudah.push(r.PENGUMUMAN_ID); });
-            localStorage.setItem(KUNCI_PENGUMUMAN_DIBACA, JSON.stringify(sudah));
+            try { localStorage.setItem(KUNCI_PENGUMUMAN_DIBACA, JSON.stringify(sudah)); } catch (e) { /* abaikan */ }
+            adaPengumumanBaru = false;
             const titik = document.getElementById("titikLonceng");
             if (titik) titik.style.display = "none";
+        }
+        try {
+            // SWR: isi tersimpan tampil seketika; versi terbaru menyusul bila ada perubahan.
+            await API.swr("pengumuman_" + (profil && profil.GELOMBANG || ""), function () { return API.getPengumuman(profil && profil.GELOMBANG); }, gambar);
         } catch (err) {
-            document.getElementById("isiModalPengumuman").innerHTML = '<div class="pesan-error-umum tampil">Gagal memuat pengumuman.</div>';
+            const isi = document.getElementById("isiModalPengumuman");
+            if (isi && /Memuat/.test(isi.textContent)) isi.innerHTML = '<div class="pesan-error-umum tampil">Gagal memuat pengumuman.</div>';
         }
     }
 
@@ -234,13 +254,20 @@
     // -----------------------------------------------------------------
     async function renderStatus() {
         const isiTab = document.getElementById("isiTab");
-        isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat status…</div>';
-
-        let dokumenRows = [];
+        // Kartu Penerimaan langsung tampil dari data profil; kartu Dokumen diisi
+        // begitu data dokumen tiba (dari cache seketika, lalu disegarkan).
+        gambarStatus([], true);
         try {
-            const res = await API.getDokumen();
-            dokumenRows = (res.ok && res.data && res.data.dokumen) ? res.data.dokumen : [];
-        } catch (err) { /* status dokumen tampil "belum diketahui" */ }
+            await API.swr("dokumen", function () { return API.getDokumen(); }, function (res) {
+                if (tabAktif !== "status") return;
+                gambarStatus((res && res.ok && res.data && res.data.dokumen) ? res.data.dokumen : [], false);
+            });
+        } catch (err) { /* kartu dokumen tetap "memeriksa" -> tampil apa adanya */ }
+    }
+
+    function gambarStatus(dokumenRows, memuatDokumen) {
+        const isiTab = document.getElementById("isiTab");
+        if (!isiTab) return;
 
         const rb = ringkasan || {};
         let penerimaan;
@@ -259,6 +286,7 @@
         let dok;
         if (perbaikan.length) dok = { judul: "Perlu Perbaikan", cls: "amber", desk: perbaikan.length + " dokumen perlu diupload ulang. Lihat catatan petugas di tab Dokumen." };
         else if (wajib.length && valid === wajib.length) dok = { judul: "Semua Dokumen Valid", cls: "hijau", desk: "Seluruh dokumen wajib sudah diperiksa dan valid." };
+        else if (memuatDokumen) dok = { judul: "Memeriksa…", cls: "abu", desk: "Memuat status dokumen." };
         else dok = { judul: valid + " dari " + wajib.length + " dokumen valid", cls: "biru", desk: terupload < wajib.length ? "Lengkapi dokumen di tab Dokumen (" + terupload + "/" + wajib.length + " sudah diupload)." : "Semua dokumen sudah diupload, menunggu pemeriksaan petugas." };
 
         isiTab.innerHTML = `
@@ -453,7 +481,7 @@
                     label.firstChild.textContent = "";
                     label.insertAdjacentHTML("afterbegin", UI.ikon("spinner") + " Mengupload…");
                     try {
-                        const res = await API.uploadDokumen(jenis, inp.files[0]);
+                        const res = await API.uploadDokumen(jenis, inp.files[0]); API.swrHapus("dokumen");
                         if (!res.ok) { UI.toast(res.pesan || "Upload gagal.", "error"); gambarUlang(); return; }
                         UI.toast("Dokumen berhasil diupload.");
                         const resUlang = await API.getDokumen();
@@ -499,6 +527,14 @@
             </div>`;
         }
 
+        // Tombol Simpan hanya relevan kalau masih ada kolom kosong yang bisa diisi.
+        const adaYangBisaDiisi = ["NILAI_MAPEL_RAPOR", "NILAI_MAPEL_TKA"].some(function (kolom, i) {
+            const existing = {};
+            parseNilai(p[kolom]).forEach(function (x) { existing[x[0]] = true; });
+            const semua = UI.csvKeArray(i === 0 ? cfgPublik.MAPEL_RAPOR_LIST : cfgPublik.MAPEL_TKA_LIST);
+            return semua.some(function (m) { return !existing[m]; });
+        }) || !String(p.PRESTASI || "").trim();
+
         isiTab.innerHTML = `
             <h3>Nilai &amp; Prestasi</h3>
             <div class="catatan hijau">${UI.ikon("info")}<span>Nilai yang sudah terisi terkunci di sini — kalau keliru, ajukan koreksi lewat tab Data Saya. Yang masih kosong bisa langsung diisi &amp; tersimpan.</span></div>
@@ -511,9 +547,10 @@
                     : `<textarea id="f_prestasiBaru" rows="2" placeholder="Tulis prestasi yang pernah diraih (opsional)"></textarea>`}
             </div>
             <div class="pesan-error-umum" id="errorNilai"></div>
-            <button type="button" class="utama blok" id="btnSimpanNilai" style="margin-top:10px;">Simpan Nilai Baru</button>
+            ${adaYangBisaDiisi ? '<button type="button" class="utama blok" id="btnSimpanNilai" style="margin-top:10px;">Simpan Nilai Baru</button>' : '<div class="teks-kecil" style="text-align:center; margin-top:10px;">Semua data nilai &amp; prestasi sudah terisi dan terkunci.</div>'}
         `;
 
+        if (!adaYangBisaDiisi) return;
         document.getElementById("btnSimpanNilai").addEventListener("click", async function () {
             const errorBox = document.getElementById("errorNilai");
             errorBox.classList.remove("tampil");
@@ -569,7 +606,7 @@
         ];
         UI.cetakHalaman(
             "Bukti Pendaftaran - " + p.NAMA_LENGKAP,
-            `<div style="text-align:center; font-size:1.25rem; font-weight:800; margin-bottom:18px;">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
+            `<div class="nama-besar">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
             <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>`,
             { judulDok: "BUKTI PENDAFTARAN", subJudul1: "SPMB TA " + (cfgPublik.TAHUN_AJARAN || "-"), subJudul2: (cfgPublik.NAMA_SEKOLAH || "").toUpperCase() }
         );

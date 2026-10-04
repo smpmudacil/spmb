@@ -251,17 +251,21 @@ const UI = (() => {
                 @page { size: A4 portrait; margin: 18mm 16mm; }
                 * { box-sizing: border-box; }
                 body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; color: #1a2e22; padding: 28px; max-width: 700px; margin: 0 auto; }
-                .kop { text-align: center; border-bottom: 3px solid #1d6e4a; padding-bottom: 14px; margin-bottom: 22px; }
-                .kop-judul { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.04em; color: #1d6e4a; }
-                .kop-sub { font-size: 0.85rem; color: #45564c; margin-top: 2px; }
+                /* print-color-adjust: exact -> latar berwarna ikut tercetak/tersimpan
+                   ke PDF (default browser membuangnya sehingga tampak polos). */
+                * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                .kop { text-align: center; background: linear-gradient(135deg, #1d6e4a, #2f9d6b); color: #fff; padding: 18px 16px; border-radius: 12px; margin-bottom: 22px; }
+                .kop-judul { font-size: 1.25rem; font-weight: 800; letter-spacing: 0.06em; color: #fff; }
+                .kop-sub { font-size: 0.85rem; color: #e3f4ea; margin-top: 3px; }
                 h1 { font-size: 1.35rem; margin: 0 0 4px; text-align: center; }
                 .sub { color: #6b7c72; font-size: 0.85rem; margin-bottom: 20px; text-align: center; }
-                table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 1px solid #dbe6df; border-radius: 6px; overflow: hidden; }
-                td { padding: 10px 14px; font-size: 0.92rem; border-bottom: 1px solid #eef3f0; }
-                tr:nth-child(even) td { background: #f4f8fd; } /* zebra biru sangat muda, hampir putih */
+                table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 2px solid #b9dcc9; border-radius: 8px; overflow: hidden; }
+                td { padding: 10px 14px; font-size: 0.92rem; border-bottom: 1px solid #d5e8dd; }
+                tr:nth-child(even) td { background: #eef7f2; }
                 tr:last-child td { border-bottom: none; }
-                td:first-child { color: #51645a; width: 42%; font-weight: 600; }
+                td:first-child { color: #1d6e4a; width: 42%; font-weight: 700; background: #e1f2e9; }
                 td:last-child { font-weight: 700; color: #16201a; }
+                .nama-besar { text-align: center; font-size: 1.3rem; font-weight: 800; color: #1d6e4a; background: #f1faf5; border: 2px dashed #8fcaa9; border-radius: 10px; padding: 12px; margin-bottom: 16px; }
                 .cap { margin-top: 28px; font-size: 0.72rem; color: #8a9790; text-align: center; }
                 @media print { body { padding: 0; } }
             </style>

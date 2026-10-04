@@ -412,6 +412,8 @@
             email: ambil("f_email"),
             jenisKelamin: jkEl.value,
             tempatTglLahir: tempatTglLahirGabungan,
+            tempatLahir: tempatLahir,
+            tanggalLahir: tanggalLahir,
             _tempatLahirMentah: tempatLahir,
             _tanggalLahirMentah: tanggalLahir,
             asalSekolah: asalSekolahFinal,
@@ -921,6 +923,9 @@
             // Buang field internal (prefiks _) yang cuma dipakai utk UX form,
             // TIDAK boleh terkirim ke server (Bagian 18.2: field dokumen &
             // internal dibuang sebelum kirim).
+            // Draft lama (sebelum kolom TTL dipisah) hanya menyimpan versi "mentah" -> isi dari situ.
+            if (!payload.tempatLahir && payload._tempatLahirMentah) payload.tempatLahir = payload._tempatLahirMentah;
+            if (!payload.tanggalLahir && payload._tanggalLahirMentah) payload.tanggalLahir = payload._tanggalLahirMentah;
             Object.keys(payload).forEach(function (k) { if (k.indexOf("_") === 0) delete payload[k]; });
 
             const res = await API.submitPendaftaran(payload);

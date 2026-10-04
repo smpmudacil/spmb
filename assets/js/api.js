@@ -60,6 +60,11 @@ const API = (() => {
         localStorage.removeItem(KUNCI_ROLE);
         localStorage.removeItem(KUNCI_NO_PENDAFTARAN);
         localStorage.removeItem(KUNCI_NAMA);
+        // Cache data pribadi (SWR) ikut dibuang supaya akun berikutnya di
+        // perangkat yang sama tidak sempat melihat data akun sebelumnya.
+        try {
+            Object.keys(sessionStorage).forEach(function (k) { if (k.indexOf("SPMB_SWR_") === 0) sessionStorage.removeItem(k); });
+        } catch (err) { /* abaikan */ }
     }
 
     /**
@@ -144,6 +149,41 @@ const API = (() => {
         return hasil;
     }
 
+    /**
+     * STALE-WHILE-REVALIDATE. Tampilkan data tersimpan SEKETIKA (kalau ada),
+     * lalu ambil data terbaru di belakang layar dan beri tahu pemanggil kalau
+     * isinya berubah. Inilah yang membuat kunjungan ke-2 dst terasa instan
+     * walau Apps Script butuh 2-15 detik per panggilan.
+     *
+     * @param {string} kunci   - kunci unik (otomatis dipisah per sesi login)
+     * @param {Function} ambil - async () => hasil API ({ok,data,...})
+     * @param {Function} saatData - (hasil, dariCache:boolean) dipanggil 1-2x
+     * @param {number} [umurMaksMs] - cache lebih tua dari ini diabaikan (default 6 jam)
+     * @returns {Promise<void>} selesai setelah data segar tiba (atau gagal)
+     */
+    async function swr(kunci, ambil, saatData, umurMaksMs) {
+        const k = "SPMB_SWR_" + kunci;
+        let lamaStr = null;
+        try {
+            const raw = sessionStorage.getItem(k);
+            if (raw) {
+                const o = JSON.parse(raw);
+                if (Date.now() - o.t <= (umurMaksMs || 6 * 60 * 60 * 1000)) { lamaStr = JSON.stringify(o.v); saatData(o.v, true); }
+            }
+        } catch (err) { /* cache rusak -> abaikan */ }
+        const baru = await ambil();
+        if (baru && baru.ok) {
+            const baruStr = JSON.stringify(baru);
+            try { sessionStorage.setItem(k, JSON.stringify({ t: Date.now(), v: baru })); } catch (err) { /* penuh -> abaikan */ }
+            if (baruStr !== lamaStr) saatData(baru, false);
+        } else if (lamaStr === null) {
+            saatData(baru, false); // tidak ada cache sama sekali -> teruskan error ke pemanggil
+        }
+    }
+    function swrHapus(awalan) {
+        try { Object.keys(sessionStorage).forEach(function (k) { if (k.indexOf("SPMB_SWR_" + (awalan || "")) === 0) sessionStorage.removeItem(k); }); } catch (err) { /* abaikan */ }
+    }
+
     // -------------------------------------------------------------------------
     // INTERNAL HELPERS — request dasar
     // -------------------------------------------------------------------------
@@ -185,7 +225,16 @@ const API = (() => {
         }
     }
 
-    async function _post(body = {}, withAuth = false) {
+    /**
+     * @param {boolean} [aman] - true HANYA untuk aksi IDEMPOTEN (mengulang
+     *   tidak menggandakan efek): login, survei, submitPendaftaran (punya
+     *   submissionId), set status/potongan. Untuk aksi ini, request yang
+     *   gagal 404/5xx/jaringan diulang 1x otomatis (Apps Script kadang
+     *   mengembalikan 404 sesaat padahal skrip sudah/akan berjalan).
+     *   Aksi yang MENAMBAH baris (catat pembayaran, tambah user, upload)
+     *   tidak pernah di-retry otomatis.
+     */
+    async function _post(body = {}, withAuth = false, aman = false) {
         if (withAuth) {
             const token = _getToken();
             if (!token || sesiKedaluwarsaClient()) {
@@ -195,23 +244,27 @@ const API = (() => {
             body.token = token;
         }
 
-        // POST TIDAK di-retry otomatis (beda dari _get) — mengulang POST
-        // yang sudah terkirim berisiko duplikasi efek samping (mis. dobel
-        // catat pembayaran). submitPendaftaran sudah py idempotency sendiri
-        // (submissionId), tapi action lain belum tentu — lebih aman gagal
-        // sekali & biarkan pengguna coba lagi manual lewat tombol.
-        const response = await fetch(APP_CONFIG.apiUrl, {
+        const opsi = {
             method: "POST",
             redirect: "follow",
             headers: { "Content-Type": "text/plain" }, // Apps Script butuh text/plain agar tidak trigger CORS preflight
             body: JSON.stringify(body),
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        };
+        const maks = aman ? 2 : 1;
+        for (let percobaan = 0; percobaan < maks; percobaan++) {
+            const terakhir = percobaan === maks - 1;
+            try {
+                const response = await fetch(APP_CONFIG.apiUrl, opsi);
+                if (!response.ok) {
+                    if (!terakhir && (response.status === 404 || response.status >= 500)) { await new Promise((r) => setTimeout(r, 900)); continue; }
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            } catch (err) {
+                if (!terakhir) { await new Promise((r) => setTimeout(r, 900)); continue; }
+                throw err;
+            }
         }
-
-        return response.json();
     }
 
     /**
@@ -325,7 +378,7 @@ const API = (() => {
      */
     async function login(noHp, noPendaftaran, pin) {
         const pinHash = await _sha256Hex(pin);
-        const hasil = await _post({ action: "login", noHp, noPendaftaran, pinHash });
+        const hasil = await _post({ action: "login", noHp, noPendaftaran, pinHash }, false, true);
         if (hasil.ok && hasil.data && hasil.data.token) {
             _simpanSesi(hasil.data.token, hasil.data.role, hasil.data.noPendaftaran);
         }
@@ -400,7 +453,7 @@ const API = (() => {
             action: "submitPendaftaran",
             submissionId,
             ...dataPendaftar,
-        });
+        }, false, true);
     }
 
     async function getProfile() {
@@ -420,7 +473,7 @@ const API = (() => {
             jawabanAlasan,
             jawabanSumber,
             jawabanSumberDetail: jawabanSumberDetail || "",
-        }, true);
+        }, true, true);
     }
 
     // -------------------------------------------------------------------------
@@ -501,7 +554,7 @@ const API = (() => {
     }
 
     async function adminVerifikasiDokumen(dokumenId, statusBaru, catatan = "") {
-        return _post({ action: "adminVerifikasiDokumen", dokumenId, statusBaru, catatan }, true);
+        return _post({ action: "adminVerifikasiDokumen", dokumenId, statusBaru, catatan }, true, true);
     }
 
     async function adminUpdateStatus(noPendaftaran, statusBaru, catatan = "") {
@@ -537,7 +590,7 @@ const API = (() => {
 
     /** [PETUGAS/ADMIN] Set potongan daftar ulang (input positif, server simpan negatif). */
     async function adminSetPotongan(noPendaftaran, potongan, keterangan) {
-        return _post({ action: "adminSetPotongan", noPendaftaran, potongan, keterangan: keterangan || "" }, true);
+        return _post({ action: "adminSetPotongan", noPendaftaran, potongan, keterangan: keterangan || "" }, true, true);
     }
 
     /** [PETUGAS/ADMIN] Statistik dashboard (cache server 5 menit; refresh=true paksa hitung ulang). */
@@ -571,11 +624,26 @@ const API = (() => {
     }
 
     async function loginSekolah(email, password, pin) {
-        const hasil = await _post({ action: "loginSekolah", email, password, pin });
+        const hasil = await _post({ action: "loginSekolah", email, password, pin }, false, true);
         if (hasil.ok && hasil.data && hasil.data.token) {
             _simpanSesi(hasil.data.token, hasil.data.role, null, hasil.data.nama);
         }
         return hasil;
+    }
+
+    /** [PETUGAS/ADMIN] Semua pengumuman termasuk yang nonaktif (butuh token). */
+    async function adminGetPengumuman() {
+        return _get({ action: "getPengumuman", semua: "1" }, true);
+    }
+
+    /** [ADMIN] Koreksi pembayaran yang salah input (nominal/jenis/metode/tanggal). */
+    async function adminEditPembayaran(paymentId, data) {
+        return _post(Object.assign({ action: "adminEditPembayaran", paymentId }, data), true, true);
+    }
+
+    /** [PETUGAS/ADMIN] Riwayat aktivitas satu pendaftar (dari LOG_AKTIVITAS). */
+    async function adminGetRiwayat(noPendaftaran) {
+        return _get({ action: "adminGetRiwayat", noPendaftaran }, true);
     }
 
     async function adminSimpanPengumuman(pengumumanId, judul, isi, aktif, link, targetGelombang) {
@@ -614,6 +682,11 @@ const API = (() => {
         // Auth
         login,
         loginSekolah,
+        swr,
+        swrHapus,
+        adminGetPengumuman,
+        adminEditPembayaran,
+        adminGetRiwayat,
         logout,
         hapusSesiLokal,
         verifyToken,

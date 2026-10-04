@@ -49,7 +49,7 @@
     let noPendaftaranDetail = null;
     let detailAktif = null;
     let subTabDetail = "diri";
-    let filterPendaftar = { status: "", gelombang: "", cari: "", page: 1, urutan: "terbaru" };
+    let filterPendaftar = { status: "", gelombang: "", cari: "", page: 1, urutan: "terbaru", prestasi: false };
 
     // -----------------------------------------------------------------
     // BOOTSTRAP
@@ -95,6 +95,7 @@
         const tabs = [
             ["beranda", "jam", "Beranda"],
             ["pendaftar", "info", "Data Pendaftar"],
+            ["prestasi", "cek", "Prestasi"],
             ["pengajuan", "info", "Pengajuan"],
             ["pengumuman", "unggah", "Pengumuman"],
         ];
@@ -129,7 +130,7 @@
             });
         });
 
-        const rute = { beranda: renderBeranda, pendaftar: renderPendaftar, pengajuan: renderPengajuan, pengumuman: renderPengumuman, pengaturan: renderPengaturan, detail: renderDetail };
+        const rute = { beranda: renderBeranda, pendaftar: renderPendaftar, prestasi: renderPrestasi, pengajuan: renderPengajuan, pengumuman: renderPengumuman, pengaturan: renderPengaturan, detail: renderDetail };
         (rute[viewAktif] || renderBeranda)();
     }
 
@@ -206,15 +207,32 @@
         return `<div style="overflow-x:auto;"><table class="tabel-data"><thead><tr><th>Mapel</th><th>Jml</th><th>Tertinggi</th><th>Terendah</th><th>Rata-rata</th></tr></thead><tbody>` +
             kunci.map(function (m) {
                 const s = peta[m];
-                return `<tr style="cursor:default;"><td>${UI.escapeHtml(m)}</td><td>${s.jumlah}</td><td>${fmtDesimal(s.tertinggi)}</td><td>${fmtDesimal(s.terendah)}</td><td><strong>${fmtDesimal(s.rata)}</strong></td></tr>`;
+                return `<tr style="cursor:default;"><td>${UI.escapeHtml(m)}</td><td>${s.jumlah}</td><td>${fmtDesimal(s.tertinggi)}${s.namaTertinggi ? `<br><span class="teks-kecil">${UI.escapeHtml(s.namaTertinggi)}</span>` : ""}</td><td>${fmtDesimal(s.terendah)}</td><td><strong>${fmtDesimal(s.rata)}</strong></td></tr>`;
             }).join("") + `</tbody></table></div>`;
     }
 
     async function renderBeranda(paksaRefresh) {
         const isiTab = document.getElementById("isiTab");
         isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat statistik…</div>';
+        // SWR: kunjungan ke-2 dst langsung menampilkan statistik tersimpan (instan),
+        // versi terbaru menyusul di belakang. Tombol "Perbarui" memaksa hitung ulang.
         try {
-            const res = await API.adminStatistik(paksaRefresh === true);
+            if (paksaRefresh === true) {
+                const res = await API.adminStatistik(true);
+                API.swrHapus("stat");
+                gambarBeranda(res);
+            } else {
+                await API.swr("stat", function () { return API.adminStatistik(false); }, gambarBeranda, 30 * 60 * 1000);
+            }
+        } catch (err) {
+            isiTab.innerHTML = '<div class="pesan-error-umum tampil">Gagal memuat statistik: ' + UI.escapeHtml(err.message) + '</div>';
+        }
+    }
+
+    function gambarBeranda(res) {
+        const isiTab = document.getElementById("isiTab");
+        if (!isiTab || viewAktif !== "beranda") return;
+        try {
             if (!res.ok) { isiTab.innerHTML = '<div class="pesan-error-umum tampil">' + UI.escapeHtml(res.pesan) + '</div>'; return; }
             const d = res.data;
             const kelasKunci = Object.keys(d.perKelas || {}).sort(function (a, b) { return d.perKelas[b].jumlah - d.perKelas[a].jumlah; });
@@ -315,22 +333,20 @@
     // server tiap ganti filter/ketik. Tombol "Perbarui" selalu paksa ambil
     // ulang dari server apa pun kondisinya.
     // -----------------------------------------------------------------
-    const CACHE_PENDAFTAR_KEY = "SPMB_CACHE_PENDAFTAR_LIST";
+    const CACHE_PENDAFTAR_KEY = "SPMB_SWR_PENDAFTAR_LIST_V2"; // awalan SPMB_SWR_ -> otomatis terhapus saat logout
     const CACHE_PENDAFTAR_TTL_MS = 60 * 60 * 1000; // 1 jam
     let semuaPendaftarMemori = null; // array lengkap hasil terakhir di memori
 
-    async function ambilSemuaPendaftar(paksaRefresh) {
-        if (!paksaRefresh) {
-            try {
-                const cache = JSON.parse(sessionStorage.getItem(CACHE_PENDAFTAR_KEY) || "null");
-                if (cache && (Date.now() - cache.waktuAmbil) < CACHE_PENDAFTAR_TTL_MS) {
-                    const resLog = await API.adminLogTerakhir();
-                    if (resLog.ok && resLog.data.timestamp <= cache.waktuLog) {
-                        return cache.data; // cache masih valid, tidak ada aktivitas baru
-                    }
-                }
-            } catch (err) { /* cache korup/parse gagal -> lanjut ambil dari server */ }
-        }
+    function bacaCachePendaftar() {
+        try {
+            const cache = JSON.parse(sessionStorage.getItem(CACHE_PENDAFTAR_KEY) || "null");
+            if (cache && (Date.now() - cache.waktuAmbil) < CACHE_PENDAFTAR_TTL_MS) return cache;
+        } catch (err) { /* cache korup -> abaikan */ }
+        return null;
+    }
+    function hapusCachePendaftar() { try { sessionStorage.removeItem(CACHE_PENDAFTAR_KEY); } catch (e) { /* abaikan */ } }
+
+    async function ambilPendaftarDariServer() {
         const [resList, resLog] = await Promise.all([API.adminGetPendaftar({ semua: "1" }), API.adminLogTerakhir()]);
         if (!resList.ok) throw new Error(resList.pesan);
         const data = resList.data.pendaftar;
@@ -340,11 +356,32 @@
         return data;
     }
 
+    /**
+     * Data pendaftar untuk Data Pendaftar & Prestasi.
+     * Kalau cache ada: DIKEMBALIKAN SEKETIKA (tanpa menunggu server) dan
+     * `saatSegar(dataBaru)` dipanggil nanti HANYA bila pengecekan di belakang
+     * layar (adminLogTerakhir) menemukan ada aktivitas baru.
+     */
+    async function ambilSemuaPendaftar(paksaRefresh, saatSegar) {
+        const cache = paksaRefresh ? null : bacaCachePendaftar();
+        if (cache) {
+            API.adminLogTerakhir().then(async function (resLog) {
+                if (resLog.ok && resLog.data.timestamp > cache.waktuLog) {
+                    const baru = await ambilPendaftarDariServer();
+                    if (saatSegar) saatSegar(baru);
+                }
+            }).catch(function () { /* cek gagal -> tetap pakai cache */ });
+            return cache.data;
+        }
+        return ambilPendaftarDariServer();
+    }
+
     /** Ekspor CSV dari data yang SUDAH ADA di memori (sama hasil filter status+cari yang sedang tampil) — tanpa panggilan server tambahan. */
     function eksporPendaftarCsv() {
         if (!semuaPendaftarMemori) { UI.toast("Data belum siap, tunggu sebentar.", "error"); return; }
         let rows = semuaPendaftarMemori;
         if (filterPendaftar.status) rows = rows.filter(function (r) { return r.STATUS_PENDAFTARAN === filterPendaftar.status; });
+        if (filterPendaftar.prestasi) rows = rows.filter(function (r) { return String(r.PRESTASI || "").trim() !== ""; });
         if (filterPendaftar.cari) {
             const q = filterPendaftar.cari;
             rows = rows.filter(function (r) {
@@ -387,6 +424,7 @@
                     <input type="text" id="fFilterCari" value="${UI.escapeHtml(filterPendaftar.cari)}" placeholder="Ketik untuk cari instan...">
                 </div>
             </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; margin:0 0 8px;"><input type="checkbox" id="fFilterPrestasi" style="width:auto;" ${filterPendaftar.prestasi ? "checked" : ""}> Hanya yang punya prestasi</label>
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                 <button type="button" id="btnUrutkan" style="padding:6px 10px; font-size:0.7rem;">${UI.ikon("jam")} ${filterPendaftar.urutan === "terbaru" ? "Terbaru Dulu" : "Terlama Dulu"}</button>
                 <div style="display:flex; gap:8px;">
@@ -398,6 +436,7 @@
         `;
 
         document.getElementById("fFilterStatus").addEventListener("change", function (e) { filterPendaftar.status = e.target.value; filterPendaftar.page = 1; gambarTabelDariMemori(); });
+        document.getElementById("fFilterPrestasi").addEventListener("change", function (e) { filterPendaftar.prestasi = e.target.checked; filterPendaftar.page = 1; gambarTabelDariMemori(); });
         document.getElementById("fFilterCari").addEventListener("input", function (e) {
             // Tidak ada debounce/timeout server — data sudah di memori, filter instan tiap huruf.
             filterPendaftar.cari = e.target.value.trim().toLowerCase();
@@ -424,7 +463,10 @@
         const wadah = document.getElementById("daftarPendaftarTabel");
         wadah.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat data…</div>';
         try {
-            semuaPendaftarMemori = await ambilSemuaPendaftar(paksaRefresh);
+            semuaPendaftarMemori = await ambilSemuaPendaftar(paksaRefresh, function (baru) {
+                semuaPendaftarMemori = baru;
+                if (viewAktif === "pendaftar" && document.getElementById("daftarPendaftarTabel")) gambarTabelDariMemori();
+            });
             gambarTabelDariMemori();
         } catch (err) {
             wadah.innerHTML = '<div class="pesan-error-umum tampil">Error jaringan: ' + UI.escapeHtml(err.message) + '</div>';
@@ -506,6 +548,7 @@
     // pernah menampilkan data basi setelah petugas sendiri mengubahnya.
     const CACHE_DETAIL_TTL_MS = 5 * 60 * 1000;
     async function renderDetail(paksaRefresh) {
+        if (paksaRefresh === true) { hapusCachePendaftar(); API.swrHapus("stat"); }
         const isiTab = document.getElementById("isiTab");
         isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat detail pendaftar…</div>';
 
@@ -551,6 +594,7 @@
                 <button type="button" class="subtab-btn" data-sub="diri">Data Lengkap</button>
                 <button type="button" class="subtab-btn" data-sub="dokumen">Dokumen</button>
                 <button type="button" class="subtab-btn" data-sub="pembayaran">Pembayaran</button>
+                <button type="button" class="subtab-btn" data-sub="riwayat">Riwayat</button>
             </div>
             <div id="isiSubDetail"></div>
         `;
@@ -572,31 +616,32 @@
         if (subTabDetail === "diri") { renderSubDataDiri(detail, wadah); return; }
         if (subTabDetail === "dokumen") { renderSubDokumen(detail, wadah); return; }
         if (subTabDetail === "pembayaran") { renderSubPembayaran(detail, wadah); return; }
+        if (subTabDetail === "riwayat") { renderSubRiwayat(detail, wadah); return; }
     }
 
     // Definisi field per bagian -> form dibangun otomatis, hirarki jelas.
     // [key, label, tipe]  tipe: t=teks, a=textarea, s=select (opsi di bawah)
     const BAGIAN_DATA = [
         { judul: "A. Data Calon Siswa", field: [
-            ["NAMA_LENGKAP", "Nama Lengkap", "t"], ["NISN", "NISN", "t"], ["JENIS_KELAMIN", "Jenis Kelamin", "jk"],
-            ["TEMPAT_TGL_LAHIR", "Tempat, Tanggal Lahir", "t"], ["ASAL_SEKOLAH", "Asal Sekolah", "t"],
-            ["ALAMAT", "Alamat", "a"], ["ANAK_KE", "Anak ke-", "t"], ["JUMLAH_SAUDARA", "Jumlah Saudara", "t"],
-            ["NO_HP", "No. HP", "t"], ["EMAIL", "Email", "t"],
+            ["NAMA_LENGKAP", "Nama Lengkap", "t"], ["NISN", "NISN (10 digit)", "nisn"], ["JENIS_KELAMIN", "Jenis Kelamin", "jk"],
+            ["TEMPAT_LAHIR", "Tempat Lahir", "t"], ["TANGGAL_LAHIR", "Tanggal Lahir", "tgl"], ["ASAL_SEKOLAH", "Asal Sekolah", "t"],
+            ["ALAMAT", "Alamat (pemisah ; antar bagian)", "a"], ["ANAK_KE", "Anak ke-", "int"], ["JUMLAH_SAUDARA", "Jumlah Saudara", "int"],
+            ["NO_HP", "No. HP (08xxxxxxxxxx)", "hp"], ["EMAIL", "Email", "em"],
         ] },
         { judul: "B. Data Ayah", field: [
-            ["NAMA_AYAH", "Nama Ayah", "t"], ["PEKERJAAN_AYAH", "Pekerjaan", "t"], ["NO_HP_AYAH", "No. HP", "t"],
+            ["NAMA_AYAH", "Nama Ayah", "t"], ["PEKERJAAN_AYAH", "Pekerjaan", "t"], ["NO_HP_AYAH", "No. HP", "hp"],
             ["ALAMAT_AYAH", "Alamat", "a"], ["SUDAH_ALMARHUM_AYAH", "Almarhum?", "yn"],
         ] },
         { judul: "C. Data Ibu", field: [
-            ["NAMA_IBU", "Nama Ibu", "t"], ["PEKERJAAN_IBU", "Pekerjaan", "t"], ["NO_HP_IBU", "No. HP", "t"],
+            ["NAMA_IBU", "Nama Ibu", "t"], ["PEKERJAAN_IBU", "Pekerjaan", "t"], ["NO_HP_IBU", "No. HP", "hp"],
             ["ALAMAT_IBU", "Alamat", "a"], ["SUDAH_ALMARHUM_IBU", "Almarhum?", "yn"],
         ] },
         { judul: "D. Data Wali", field: [
-            ["NAMA_WALI", "Nama Wali", "t"], ["HUBUNGAN_WALI", "Hubungan", "t"], ["NO_HP_WALI", "No. HP", "t"],
+            ["NAMA_WALI", "Nama Wali", "t"], ["HUBUNGAN_WALI", "Hubungan", "t"], ["NO_HP_WALI", "No. HP", "hp"],
         ] },
         { judul: "E. Pilihan Sekolah & BTQ", field: [
             ["KELAS_PEMINATAN", "Kelas Peminatan", "kelas"], ["BOARDING", "Boarding", "yt"], ["GELOMBANG", "Gelombang", "gel"],
-            ["TINGKAT_BACAAN_BTQ", "Tingkat Bacaan BTQ", "t"], ["POSISI_BACAAN_QURAN", "Posisi Bacaan", "t"], ["HAFALAN_JUZ_BTQ", "Hafalan (Juz)", "t"],
+            ["TINGKAT_BACAAN_BTQ", "Tingkat Bacaan BTQ", "btqT"], ["POSISI_BACAAN_QURAN", "Posisi Bacaan", "btqP"], ["HAFALAN_JUZ_BTQ", "Hafalan (Juz)", "btqH"],
         ] },
     ];
 
@@ -609,19 +654,71 @@
         return o;
     }
 
+    /**
+     * Satu kontrol isian. Pilihan tetap (jenis kelamin, kelas, boarding,
+     * almarhum, gelombang) memakai COMBO TANPA opsi kosong; angka (NISN,
+     * No. HP, anak ke-) hanya menerima digit; tanggal lahir pakai date picker.
+     * Aturannya disamakan dengan daftar.html & divalidasi ulang di server.
+     */
     function inputField(p, f) {
         const [k, label, tipe] = f;
         const v = p[k] == null ? "" : String(p[k]);
+        const pilihan = function (opsi, boleh_kosong, nonaktif) {
+            const daftar = opsi.slice();
+            if (v && daftar.indexOf(v) === -1) daftar.unshift(v); // nilai lama di luar daftar tetap tampil (tidak diubah diam-diam)
+            return `<select data-k="${k}" ${nonaktif ? "disabled" : ""}>${boleh_kosong ? '<option value="">— kosong —</option>' : ""}${daftar.map(function (o) { return `<option value="${UI.escapeHtml(o)}" ${o === v ? "selected" : ""}>${UI.escapeHtml(o)}</option>`; }).join("")}</select>`;
+        };
         let ctrl;
         if (tipe === "a") ctrl = `<textarea rows="2" data-k="${k}">${UI.escapeHtml(v)}</textarea>`;
-        else if (tipe === "jk" || tipe === "yn" || tipe === "yt" || tipe === "kelas") {
-            let opsi = tipe === "jk" ? ["Laki-laki", "Perempuan"] : (tipe === "kelas" ? UI.csvKeArray(cfgPublik.KELAS_PEMINATAN_LIST) : ["Ya", "Tidak"]);
-            if (v && opsi.indexOf(v) === -1) opsi = [v].concat(opsi);
-            ctrl = `<select data-k="${k}"><option value=""></option>${opsi.map(function (o) { return `<option value="${UI.escapeHtml(o)}" ${o === v ? "selected" : ""}>${UI.escapeHtml(o)}</option>`; }).join("")}</select>`;
-        } else if (tipe === "gel") {
-            ctrl = `<input type="text" data-k="${k}" value="${UI.escapeHtml(v)}" ${isAdmin() ? "" : "disabled"}>`;
-        } else ctrl = `<input type="text" data-k="${k}" value="${UI.escapeHtml(v)}">`;
+        else if (tipe === "jk") ctrl = pilihan(["Laki-laki", "Perempuan"], false);
+        else if (tipe === "yn" || tipe === "yt") ctrl = pilihan(["Tidak", "Ya"], false);
+        else if (tipe === "kelas") ctrl = pilihan(UI.csvKeArray(cfgPublik.KELAS_PEMINATAN_LIST), false);
+        else if (tipe === "gel") ctrl = pilihan(["1", "2", "3", "Khusus"], false, !isAdmin());
+        else if (tipe === "btqT") ctrl = pilihan(UI.csvKeArray(cfgPublik.BTQ_TINGKAT_BACAAN_LIST), true);
+        else if (tipe === "btqP") {
+            let peta = {}; try { peta = JSON.parse(cfgPublik.BTQ_TINGKAT_DETAIL_LIST || "{}"); } catch (e) { peta = {}; }
+            const semua = UI.csvKeArray(cfgPublik.BTQ_POSISI_QURAN_LIST);
+            Object.keys(peta).forEach(function (t) { (peta[t] || []).forEach(function (x) { if (semua.indexOf(x) === -1) semua.push(x); }); });
+            ctrl = pilihan(semua, true);
+        }
+        else if (tipe === "btqH") ctrl = pilihan(UI.csvKeArray(cfgPublik.BTQ_HAFALAN_LIST), true);
+        else if (tipe === "tgl") ctrl = `<input type="date" data-k="${k}" value="${UI.escapeHtml(v)}" max="${new Date().toISOString().slice(0, 10)}">`;
+        else if (tipe === "nisn") ctrl = `<input type="text" inputmode="numeric" maxlength="10" data-k="${k}" data-digit="1" value="${UI.escapeHtml(v)}">`;
+        else if (tipe === "hp") ctrl = `<input type="text" inputmode="numeric" maxlength="13" placeholder="08xxxxxxxxxx" data-k="${k}" data-digit="1" value="${UI.escapeHtml(v)}">`;
+        else if (tipe === "int") ctrl = `<input type="text" inputmode="numeric" maxlength="2" data-k="${k}" data-digit="1" value="${UI.escapeHtml(v)}">`;
+        else if (tipe === "em") ctrl = `<input type="email" inputmode="email" data-k="${k}" value="${UI.escapeHtml(v)}" autocomplete="off">`;
+        else ctrl = `<input type="text" data-k="${k}" value="${UI.escapeHtml(v)}">`;
         return `<div class="field"><label style="margin-top:6px; font-size:0.72rem;">${label}</label>${ctrl}</div>`;
+    }
+
+    /**
+     * Validasi sisi klien untuk Edit Data Pendaftar (UX cepat; server tetap
+     * memvalidasi ulang). Hanya field yang DIUBAH yang diperiksa, supaya data
+     * lama yang kurang rapi tidak memblokir koreksi di field lain.
+     */
+    function validasiEditKlien(p, payload) {
+        const err = [];
+        const ada = function (k) { return Object.prototype.hasOwnProperty.call(payload, k); };
+        const nilai = function (k) { return String(ada(k) ? payload[k] : (p[k] == null ? "" : p[k])).trim(); };
+        ["NAMA_LENGKAP", "TEMPAT_LAHIR", "ASAL_SEKOLAH", "ALAMAT"].forEach(function (k) { if (ada(k) && !nilai(k)) err.push("Kolom " + k.replace(/_/g, " ").toLowerCase() + " tidak boleh kosong."); });
+        if (ada("NISN") && !/^\d{10}$/.test(nilai("NISN"))) err.push("NISN harus 10 digit angka.");
+        if (ada("NO_HP") && !/^08\d{8,11}$/.test(nilai("NO_HP"))) err.push("No. HP pendaftar harus format 08xxxxxxxxxx (hanya angka).");
+        ["NO_HP_AYAH", "NO_HP_IBU", "NO_HP_WALI"].forEach(function (k) { if (ada(k) && nilai(k) && !/^08\d{8,11}$/.test(nilai(k))) err.push(k.replace(/_/g, " ") + " harus format 08xxxxxxxxxx atau dikosongkan."); });
+        if (ada("EMAIL") && nilai("EMAIL") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nilai("EMAIL"))) err.push("Format email tidak valid.");
+        if (ada("TANGGAL_LAHIR")) {
+            const t = nilai("TANGGAL_LAHIR");
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) err.push("Tanggal lahir wajib diisi.");
+            else if (new Date(t) > new Date()) err.push("Tanggal lahir tidak boleh di masa depan.");
+        }
+        if (ada("ANAK_KE") || ada("JUMLAH_SAUDARA")) {
+            const a = nilai("ANAK_KE"), j = nilai("JUMLAH_SAUDARA");
+            if (/^\d+$/.test(a) && /^\d+$/.test(j)) {
+                if (+a < 1 || +j < 1) err.push("Anak ke- dan jumlah saudara minimal 1.");
+                else if (+a > +j) err.push("Anak ke-" + a + " tidak boleh lebih besar dari jumlah saudara (" + j + ").");
+            }
+        }
+        if ((ada("NO_HP_AYAH") || ada("NO_HP_IBU") || ada("NO_HP_WALI")) && !nilai("NO_HP_AYAH") && !nilai("NO_HP_IBU") && !nilai("NO_HP_WALI")) err.push("Minimal 1 No. HP Ayah/Ibu/Wali harus terisi.");
+        return err;
     }
 
     function blokNilai(judul, kolom, mapelConfig, p) {
@@ -633,6 +730,94 @@
                 return `<div class="field"><label style="margin-top:4px; font-size:0.72rem;">${UI.escapeHtml(m)}</label><input type="text" inputmode="decimal" data-nilai="${kolom}" data-mapel="${UI.escapeHtml(m)}" value="${UI.escapeHtml(data[m] || "")}"></div>`;
             }).join("")}</div>
             <div class="ringkasan-nilai" data-ringkas="${kolom}" style="display:none;"></div>`;
+    }
+
+    // -----------------------------------------------------------------
+    // PRESTASI & PERINGKAT NILAI — dihitung 100% di browser dari data
+    // pendaftar yang sudah ada di memori/cache (nol panggilan server tambahan).
+    // -----------------------------------------------------------------
+    const statPrestasi = { jenis: "rapor_total", batas: 10 };
+
+    function nilaiSiswa(kolom, str) {
+        const peta = parseNilaiStr(str);
+        const daftar = Object.keys(peta).map(function (m) { return [m, parseFloat(String(peta[m]).replace(",", "."))]; }).filter(function (x) { return !isNaN(x[1]); });
+        const total = daftar.reduce(function (a, x) { return a + x[1]; }, 0);
+        return { peta: daftar, total: total, rata: daftar.length ? total / daftar.length : 0, n: daftar.length };
+    }
+
+    async function renderPrestasi() {
+        const isiTab = document.getElementById("isiTab");
+        isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat data…</div>';
+        try {
+            semuaPendaftarMemori = await ambilSemuaPendaftar(false, function (baru) {
+                semuaPendaftarMemori = baru;
+                if (viewAktif === "prestasi") gambarPrestasi();
+            });
+        } catch (err) { isiTab.innerHTML = '<div class="pesan-error-umum tampil">' + UI.escapeHtml(err.message) + '</div>'; return; }
+        gambarPrestasi();
+    }
+
+    function gambarPrestasi() {
+        const isiTab = document.getElementById("isiTab");
+        if (!isiTab || viewAktif !== "prestasi" || !semuaPendaftarMemori) return;
+        const data = semuaPendaftarMemori;
+
+        // daftar mapel yang benar-benar ada di data (urutan pertama muncul)
+        const mapelDari = function (kolom) {
+            const hasil = [];
+            data.forEach(function (r) { Object.keys(parseNilaiStr(r[kolom])).forEach(function (m) { if (hasil.indexOf(m) === -1) hasil.push(m); }); });
+            return hasil;
+        };
+        const mapelRapor = mapelDari("NILAI_MAPEL_RAPOR"), mapelTka = mapelDari("NILAI_MAPEL_TKA");
+        const opsi = [["rapor_total", "Rapor — total nilai tertinggi"], ["tka_total", "TKA — total skor tertinggi"]]
+            .concat(mapelTka.map(function (m) { return ["tka:" + m, "TKA — mapel " + m]; }))
+            .concat(mapelRapor.map(function (m) { return ["rapor:" + m, "Rapor — mapel " + m]; }))
+            .concat([["prestasi", "Pendaftar berprestasi (semua)"]]);
+        if (!opsi.some(function (o) { return o[0] === statPrestasi.jenis; })) statPrestasi.jenis = "rapor_total";
+
+        let barisHtml = "", total = 0, judulNilai = "Nilai";
+        const j = statPrestasi.jenis;
+        if (j === "prestasi") {
+            const rows = data.filter(function (r) { return String(r.PRESTASI || "").trim() !== ""; });
+            total = rows.length;
+            barisHtml = rows.slice(0, statPrestasi.batas).map(function (r, i) {
+                return `<div class="kartu" data-no="${UI.escapeHtml(r.NO_PENDAFTARAN)}" style="cursor:pointer;"><strong>${i + 1}. ${UI.escapeHtml(r.NAMA_LENGKAP)}</strong> <span class="teks-kecil">(${UI.escapeHtml(r.NO_PENDAFTARAN)} · ${UI.escapeHtml(r.KELAS_PEMINATAN || "-")})</span><div class="teks-lembut" style="margin-top:4px;">${UI.escapeHtml(r.PRESTASI)}</div></div>`;
+            }).join("");
+        } else {
+            const kolom = j.indexOf("rapor") === 0 ? "NILAI_MAPEL_RAPOR" : "NILAI_MAPEL_TKA";
+            const mapel = j.indexOf(":") !== -1 ? j.slice(j.indexOf(":") + 1) : null;
+            judulNilai = mapel ? "Nilai " + mapel : "Total (rata-rata)";
+            const peringkat = [];
+            data.forEach(function (r) {
+                const n = nilaiSiswa(kolom, r[kolom]);
+                if (!n.n) return;
+                if (mapel) {
+                    const kena = n.peta.filter(function (x) { return x[0] === mapel; })[0];
+                    if (kena) peringkat.push({ r: r, skor: kena[1], teks: String(kena[1]) });
+                } else {
+                    peringkat.push({ r: r, skor: n.total, teks: n.total.toFixed(2) + ' <span class="teks-kecil">(rata ' + n.rata.toFixed(2) + ", " + n.n + " mapel)</span>" });
+                }
+            });
+            peringkat.sort(function (a, b) { return b.skor - a.skor; });
+            total = peringkat.length;
+            barisHtml = peringkat.length ? `<div style="overflow-x:auto;"><table class="tabel-data"><thead><tr><th>#</th><th>Nama</th><th>Asal Sekolah</th><th>Kelas</th><th>${UI.escapeHtml(judulNilai)}</th></tr></thead><tbody>` +
+                peringkat.slice(0, statPrestasi.batas).map(function (x, i) {
+                    return `<tr data-no="${UI.escapeHtml(x.r.NO_PENDAFTARAN)}"><td>${i + 1}</td><td><strong>${UI.escapeHtml(x.r.NAMA_LENGKAP)}</strong><br><span class="teks-kecil">${UI.escapeHtml(x.r.NO_PENDAFTARAN)}</span></td><td>${UI.escapeHtml(x.r.ASAL_SEKOLAH || "-")}</td><td>${UI.escapeHtml(x.r.KELAS_PEMINATAN || "-")}</td><td><strong>${x.teks}</strong></td></tr>`;
+                }).join("") + "</tbody></table></div>" : '<div class="kartu teks-lembut" style="text-align:center;">Belum ada data nilai.</div>';
+        }
+
+        isiTab.innerHTML = `
+            <h3 style="margin:0 0 8px;">Prestasi &amp; Peringkat Nilai</h3>
+            <div class="field"><label style="margin-top:0;">Tampilkan</label>
+                <select id="fJenisPrestasi">${opsi.map(function (o) { return `<option value="${UI.escapeHtml(o[0])}" ${o[0] === j ? "selected" : ""}>${UI.escapeHtml(o[1])}</option>`; }).join("")}</select></div>
+            <div class="teks-kecil" style="margin:6px 0 10px;">Menampilkan ${Math.min(statPrestasi.batas, total)} dari ${total} data. Klik baris untuk membuka detail pendaftar.</div>
+            ${barisHtml}
+            ${total > statPrestasi.batas ? `<button type="button" class="blok" id="btnLebihBanyak" style="margin-top:10px;">Tampilkan lebih banyak</button>` : ""}
+        `;
+        document.getElementById("fJenisPrestasi").addEventListener("change", function (e) { statPrestasi.jenis = e.target.value; statPrestasi.batas = 10; gambarPrestasi(); });
+        const btnLebih = document.getElementById("btnLebihBanyak");
+        if (btnLebih) btnLebih.addEventListener("click", function () { statPrestasi.batas = statPrestasi.batas < 50 ? 50 : 100000; gambarPrestasi(); });
+        isiTab.querySelectorAll("[data-no]").forEach(function (el) { el.addEventListener("click", function () { bukaDetail(el.getAttribute("data-no")); }); });
     }
 
     // -----------------------------------------------------------------
@@ -724,7 +909,7 @@
         ];
         UI.cetakHalaman(
             "Info Pendaftar - " + p.NAMA_LENGKAP,
-            `<div style="text-align:center; font-size:1.25rem; font-weight:800; margin-bottom:18px;">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
+            `<div class="nama-besar">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
             <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>`,
             { judulDok: "INFO PENDAFTAR", subJudul1: "SPMB TA " + (cfgPublik.TAHUN_AJARAN || "-"), subJudul2: (cfgPublik.NAMA_SEKOLAH || "").toUpperCase() }
         );
@@ -762,6 +947,10 @@
                 </div>
             </div>
         `;
+
+        wadah.querySelectorAll('[data-digit="1"]').forEach(function (el) {
+            el.addEventListener("input", function () { const bersih = el.value.replace(/\D/g, ""); if (bersih !== el.value) el.value = bersih; });
+        });
 
         const selKelas = wadah.querySelector('[data-k="KELAS_PEMINATAN"]');
         selKelas.addEventListener("change", function () { document.getElementById("blokAlasanPindah").style.display = selKelas.value !== (p.KELAS_PEMINATAN || "") ? "block" : "none"; });
@@ -817,6 +1006,8 @@
                 if (!payload.alasanPindahKelas) { errorBox.textContent = "Alasan pindah kelas wajib diisi."; errorBox.classList.add("tampil"); return; }
             }
             if (Object.keys(payload).length === 1) { UI.toast("Tidak ada perubahan untuk disimpan."); return; }
+            const kesalahan = validasiEditKlien(p, payload);
+            if (kesalahan.length) { errorBox.textContent = kesalahan.join(" "); errorBox.classList.add("tampil"); errorBox.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
 
             const btn = document.getElementById("btnSimpanDiri");
             btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Menyimpan…";
@@ -890,17 +1081,32 @@
                         <span class="nama" style="font-weight:800; font-size:0.8rem;">${judul}</span>
                         <span class="badge ${row.STATUS === "Valid" ? "hijau" : (row.STATUS === "Perlu Perbaikan" ? "amber" : "biru")}">${UI.escapeHtml(row.STATUS)}</span>
                     </div>
-                    <button type="button" class="tombol teks" data-buka="dokumen" data-id="${UI.escapeHtml(row.DOKUMEN_ID)}" style="padding-left:0;">Lihat berkas ${UI.ikon("panah")}</button>
+                    <div data-dok-kartu="${UI.escapeHtml(row.DOKUMEN_ID)}">
+                    <button type="button" class="tombol teks" data-buka="dokumen" data-id="${UI.escapeHtml(row.DOKUMEN_ID)}" data-lihat-dok style="padding-left:0;">Lihat berkas ${UI.ikon("panah")}</button>
                     ${row.CATATAN_PETUGAS ? `<div class="catatan-petugas">"${UI.escapeHtml(row.CATATAN_PETUGAS)}"</div>` : ""}
-                    ${row.STATUS !== "Valid" ? `
-                        <div style="display:flex; gap:8px; margin-top:10px;">
-                            <button type="button" class="utama" data-verif="${row.DOKUMEN_ID}" data-status="Valid" style="flex:1;">Tandai Valid</button>
-                            <button type="button" data-verif="${row.DOKUMEN_ID}" data-status="Perlu Perbaikan" style="flex:1;">Perlu Perbaikan</button>
-                        </div>` : ""}
+                    ${row.STATUS === "Valid" ? `
+                        <div class="teks-kecil" style="margin-top:6px;">Dokumen terkunci untuk pendaftar. Salah tandai? Klik di bawah untuk membuka kunci agar pendaftar bisa upload ulang.</div>
+                        <div style="display:flex; gap:8px; margin-top:8px;">
+                            <button type="button" data-verif="${row.DOKUMEN_ID}" data-status="Perlu Perbaikan" style="flex:1;">Buka Kunci (Perlu Perbaikan)</button>
+                        </div>` : `
+                        <div class="teks-kecil" data-hint-dok style="margin-top:6px;">Buka berkas dulu sebelum menandai.</div>
+                        <div style="display:flex; gap:8px; margin-top:8px;">
+                            <button type="button" class="utama" data-verif="${row.DOKUMEN_ID}" data-status="Valid" style="flex:1;" disabled>Tandai Valid</button>
+                            <button type="button" data-verif="${row.DOKUMEN_ID}" data-status="Perlu Perbaikan" style="flex:1;" disabled>Perlu Perbaikan</button>
+                        </div>`}
+                    </div>
                 </div>`;
             }).join("");
 
-        pasangTombolBuka(wadah);
+        // Tombol penilaian baru aktif setelah berkas BENAR-BENAR berhasil dibuka
+        // (sama seperti pembayaran) -> tidak ada lagi "Valid" tanpa dilihat.
+        pasangTombolBuka(wadah, function (tombol) {
+            if (!tombol.hasAttribute("data-lihat-dok")) return;
+            const kartu = tombol.closest("[data-dok-kartu]");
+            kartu.querySelectorAll("[data-verif]").forEach(function (b) { b.disabled = false; });
+            const hint = kartu.querySelector("[data-hint-dok]");
+            if (hint) hint.textContent = "Berkas sudah dibuka — silakan nilai.";
+        });
 
         wadah.querySelectorAll("[data-verif]").forEach(function (btn) {
             btn.addEventListener("click", async function () {
@@ -921,6 +1127,21 @@
                 } catch (err) { UI.toast(err.message || "Gagal memperbarui status.", "error"); btn.disabled = false; btn.textContent = statusBaru === "Valid" ? "Tandai Valid" : "Perlu Perbaikan"; }
             });
         });
+    }
+
+    /** Riwayat perubahan satu pendaftar (dari LOG_AKTIVITAS) — termasuk alasan pindah kelas & nilai lama -> baru. */
+    async function renderSubRiwayat(detail, wadah) {
+        wadah.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat riwayat…</div>';
+        try {
+            const res = await API.adminGetRiwayat(detail.pendaftar.NO_PENDAFTARAN);
+            if (!res.ok) throw new Error(res.pesan);
+            const rows = res.data.riwayat || [];
+            wadah.innerHTML = rows.length ? rows.map(function (r) {
+                return `<div class="kartu"><div style="display:flex; justify-content:space-between; gap:8px;"><strong style="font-size:0.78rem;">${UI.escapeHtml(r.aksi)}</strong><span class="teks-kecil">${UI.formatTanggal(r.waktu)}</span></div>
+                    <div class="teks-kecil">oleh ${UI.escapeHtml(r.user || "-")} (${UI.escapeHtml(r.role || "-")})</div>
+                    <div style="font-size:0.78rem; margin-top:4px; word-break:break-word;">${UI.escapeHtml(r.detail || "")}</div></div>`;
+            }).join("") : '<div class="kartu teks-lembut" style="text-align:center;">Belum ada riwayat.</div>';
+        } catch (err) { wadah.innerHTML = '<div class="pesan-error-umum tampil">' + UI.escapeHtml(err.message || "Gagal memuat riwayat.") + '</div>'; }
     }
 
     function renderSubPembayaran(detail, wadah) {
@@ -978,9 +1199,27 @@
             } catch (err) { eb.textContent = err.message || "Gagal."; eb.classList.add("tampil"); btn.disabled = false; btn.textContent = "Simpan Potongan"; }
         });
 
+        document.getElementById("fNominalBayar").addEventListener("input", function (e) {
+            const bersih = e.target.value.replace(/\D/g, "");
+            if (bersih !== e.target.value) e.target.value = bersih;
+        });
         document.getElementById("btnCatatBayar").addEventListener("click", async function (e) {
             const btn = e.currentTarget, eb = document.getElementById("errorCatatBayar");
             eb.classList.remove("tampil");
+            // CEK SEBELUM KIRIM: angka harus masuk akal & tidak melebihi sisa tagihan,
+            // lalu minta konfirmasi dengan nominal tertulis jelas (mencegah salah ketik 12.500.000 vs 1.250.000).
+            const nominalAngka = parseInt(document.getElementById("fNominalBayar").value || "0", 10);
+            if (!nominalAngka || nominalAngka <= 0) { eb.textContent = "Isi nominal pembayaran (angka)."; eb.classList.add("tampil"); return; }
+            if (rb.ambang > 0 && nominalAngka > (rb.sisa || 0)) {
+                eb.textContent = "Nominal " + UI.formatRupiah(nominalAngka) + " melebihi sisa tagihan " + UI.formatRupiah(rb.sisa || 0) + ". Periksa kembali angka yang diketik.";
+                eb.classList.add("tampil"); return;
+            }
+            const konf = await modal({
+                judul: "Konfirmasi Pembayaran",
+                isiHtml: `Catat pembayaran <strong style="font-size:1.1rem;">${UI.formatRupiah(nominalAngka)}</strong> (${UI.escapeHtml(document.getElementById("fJenisBayar").value)}, ${UI.escapeHtml(document.getElementById("fMetodeBayar").value)}) untuk <strong>${UI.escapeHtml(p.NAMA_LENGKAP)}</strong>?<br><br>Sisa tagihan setelah ini: <strong>${UI.formatRupiah(Math.max(0, (rb.sisa || 0) - nominalAngka))}</strong>. Pastikan angkanya benar.`,
+                tombolOk: "Ya, Catat",
+            });
+            if (!konf.ok) return;
             btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Mencatat…";
             try {
                 const res = await API.adminInputPembayaran(p.NO_PENDAFTARAN, document.getElementById("fJenisBayar").value, document.getElementById("fMetodeBayar").value, document.getElementById("fNominalBayar").value);
@@ -1008,6 +1247,7 @@
                 <div class="teks-kecil">${UI.formatTanggal(b.TANGGAL)}</div>
                 ${adaBukti ? `<button type="button" class="tombol teks" data-buka="bukti" data-id="${UI.escapeHtml(b.PAYMENT_ID)}" data-lihat-bukti style="padding-left:0;">Lihat bukti ${UI.ikon("panah")}</button>` : (perluBukti ? '<div class="catatan amber" style="margin:6px 0;">' + UI.ikon("info") + '<span>Transfer ini belum ada bukti — belum bisa dikonfirmasi.</span></div>' : '<div class="teks-kecil">Tanpa bukti (tunai).</div>')}
                 <span class="badge ${b.STATUS_KONFIRMASI === "Dikonfirmasi" ? "hijau" : (b.STATUS_KONFIRMASI === "Ditolak" ? "merah" : "amber")}" style="display:inline-block; margin-top:4px;">${UI.escapeHtml(b.STATUS_KONFIRMASI)}</span>
+                ${isAdmin() ? `<button type="button" class="tombol teks" data-koreksi="${UI.escapeHtml(b.PAYMENT_ID)}" style="padding-left:0; display:block;">Koreksi data pembayaran (admin)</button>` : ""}
                 ${menunggu ? `
                     <div class="field"><label style="margin-top:8px; font-size:0.72rem;">Nominal (koreksi jika salah ketik)</label><input type="text" inputmode="numeric" data-nominal value="${UI.escapeHtml(String(b.NOMINAL || "").replace(/\D/g, ""))}"></div>
                     ${perluBukti && adaBukti ? '<div class="teks-kecil" data-hint-bukti style="margin-top:6px;">Buka bukti dulu sebelum mengonfirmasi.</div>' : ""}
@@ -1032,6 +1272,9 @@
             btn.addEventListener("click", async function () {
                 const kartu = btn.closest("[data-bayar-kartu]");
                 const nominal = kartu.querySelector("[data-nominal]").value;
+                const nominalAngka = parseInt(String(nominal).replace(/\D/g, "") || "0", 10);
+                if (!nominalAngka) { UI.toast("Nominal harus lebih dari 0.", "error"); return; }
+                if (rb.ambang > 0 && nominalAngka > (rb.sisa || 0)) { UI.toast("Nominal " + UI.formatRupiah(nominalAngka) + " melebihi sisa tagihan " + UI.formatRupiah(rb.sisa || 0) + ". Koreksi angkanya dulu.", "error"); return; }
                 btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Memproses…";
                 try {
                     const res = await API.adminKonfirmasiPembayaran(btn.getAttribute("data-konfirmasi"), "Dikonfirmasi", "", nominal);
@@ -1039,6 +1282,12 @@
                     UI.toast("Pembayaran dikonfirmasi.");
                     renderDetail(true);
                 } catch (err) { UI.toast(err.message || "Gagal.", "error"); btn.disabled = false; btn.textContent = "Konfirmasi"; }
+            });
+        });
+        daftar.querySelectorAll("[data-koreksi]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                const b = detail.pembayaran.find(function (x) { return x.PAYMENT_ID === btn.getAttribute("data-koreksi"); });
+                if (b) bukaFormKoreksiBayar(b, rb);
             });
         });
         daftar.querySelectorAll("[data-tolak]").forEach(function (btn) {
@@ -1056,6 +1305,42 @@
         });
     }
 
+    /** [ADMIN] Form koreksi pembayaran yang salah input (nominal/jenis/metode), dengan batas kelebihan bayar. */
+    function bukaFormKoreksiBayar(b, rb) {
+        const nominalSkrg = parseInt(String(b.NOMINAL || "0").replace(/\D/g, ""), 10) || 0;
+        // Yang boleh diisi maksimal = sisa tagihan + nominal baris ini (kalau sudah terkonfirmasi)
+        const maks = b.STATUS_KONFIRMASI === "Dikonfirmasi" ? (rb.sisa || 0) + nominalSkrg : null;
+        const latar = document.createElement("div");
+        latar.className = "modal-latar";
+        latar.innerHTML = `<div class="modal-kotak">
+            <h3 style="margin:0 0 8px;">Koreksi Pembayaran</h3>
+            <div class="teks-kecil">Tercatat: ${UI.formatRupiah(nominalSkrg)} · ${UI.escapeHtml(b.JENIS)} · ${UI.escapeHtml(b.METODE)}${maks !== null && rb.ambang > 0 ? ` · nominal maksimal yang bisa diisi: ${UI.formatRupiah(maks)}` : ""}</div>
+            <label>Nominal (angka)</label><input type="text" inputmode="numeric" id="kNominal" value="${nominalSkrg}">
+            <label>Jenis</label><select id="kJenis"><option>DP</option><option>Daftar Ulang</option></select>
+            <label>Metode</label><select id="kMetode"><option>Tunai</option><option>Transfer</option></select>
+            <div class="pesan-error-umum" id="kError"></div>
+            <div style="display:flex; gap:8px; margin-top:14px;">
+                <button type="button" id="kBatal" style="flex:1;">Batal</button>
+                <button type="button" class="utama" id="kSimpan" style="flex:1;">Simpan Koreksi</button>
+            </div></div>`;
+        document.body.appendChild(latar);
+        latar.querySelector("#kJenis").value = b.JENIS; latar.querySelector("#kMetode").value = b.METODE;
+        latar.querySelector("#kNominal").addEventListener("input", function (e) { const bersih = e.target.value.replace(/\D/g, ""); if (bersih !== e.target.value) e.target.value = bersih; });
+        latar.querySelector("#kBatal").addEventListener("click", function () { latar.remove(); });
+        latar.querySelector("#kSimpan").addEventListener("click", async function () {
+            const eb = latar.querySelector("#kError"); eb.classList.remove("tampil");
+            const nominalBaru = parseInt(latar.querySelector("#kNominal").value || "0", 10);
+            if (!nominalBaru) { eb.textContent = "Nominal harus lebih dari 0."; eb.classList.add("tampil"); return; }
+            if (maks !== null && rb.ambang > 0 && nominalBaru > maks) { eb.textContent = "Nominal " + UI.formatRupiah(nominalBaru) + " melebihi batas " + UI.formatRupiah(maks) + "."; eb.classList.add("tampil"); return; }
+            const btn = latar.querySelector("#kSimpan"); btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Menyimpan…";
+            try {
+                const res = await API.adminEditPembayaran(b.PAYMENT_ID, { nominal: String(nominalBaru), jenisPembayaran: latar.querySelector("#kJenis").value, metode: latar.querySelector("#kMetode").value });
+                if (!res.ok) throw new Error(res.pesan);
+                UI.toast(res.pesan || "Pembayaran dikoreksi."); latar.remove(); renderDetail(true);
+            } catch (err) { eb.textContent = err.message || "Gagal menyimpan."; eb.classList.add("tampil"); btn.disabled = false; btn.textContent = "Simpan Koreksi"; }
+        });
+    }
+
     // -----------------------------------------------------------------
     // PENGUMUMAN (Bagian 11)
     // -----------------------------------------------------------------
@@ -1063,26 +1348,27 @@
         const isiTab = document.getElementById("isiTab");
         isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat pengumuman…</div>';
         try {
-            const res = await API.getPengumuman();
+            const res = await API.adminGetPengumuman();
             const rows = (res.ok && res.data && res.data.pengumuman) ? res.data.pengumuman : [];
 
             isiTab.innerHTML = `
                 <button type="button" class="utama blok" id="btnBuatPengumuman">Buat Pengumuman Baru</button>
                 <div id="formPengumuman" style="display:none; margin-top:12px;"></div>
-                <h3 style="margin-top:18px;">Pengumuman Aktif</h3>
-                <div class="catatan amber">${UI.ikon("info")}<span>Daftar ini hanya menampilkan pengumuman yang sedang aktif (backend belum punya endpoint untuk melihat yang nonaktif).</span></div>
-                ${rows.length === 0 ? '<div class="kartu teks-lembut" style="text-align:center;">Belum ada pengumuman aktif.</div>' :
+                <h3 style="margin-top:18px;">Semua Pengumuman</h3>
+                <div class="catatan hijau">${UI.ikon("info")}<span>Yang nonaktif tidak tampil ke pendaftar tetapi tetap bisa dilihat di sini dan diaktifkan lagi.</span></div>
+                ${rows.length === 0 ? '<div class="kartu teks-lembut" style="text-align:center;">Belum ada pengumuman.</div>' :
                     rows.map(function (r) {
-                        return `<div class="kartu" data-id="${UI.escapeHtml(r.PENGUMUMAN_ID)}" data-judul="${UI.escapeHtml(r.JUDUL)}" data-isi="${UI.escapeHtml(r.ISI || "")}" data-link="${UI.escapeHtml(r.LINK_WA || "")}" data-target="${UI.escapeHtml(r.TARGET_GELOMBANG || "")}">
+                        const aktif = String(r.AKTIF) === "Ya";
+                        return `<div class="kartu" style="${aktif ? "" : "opacity:.65;"}" data-aktif="${aktif ? "Ya" : "Tidak"}" data-id="${UI.escapeHtml(r.PENGUMUMAN_ID)}" data-judul="${UI.escapeHtml(r.JUDUL)}" data-isi="${UI.escapeHtml(r.ISI || "")}" data-link="${UI.escapeHtml(r.LINK_WA || "")}" data-target="${UI.escapeHtml(r.TARGET_GELOMBANG || "")}">
                             <div style="display:flex; justify-content:space-between; gap:8px;">
                                 <div style="font-weight:800;">${UI.escapeHtml(r.JUDUL)}</div>
-                                ${r.TARGET_GELOMBANG ? `<span class="badge biru">Gel. ${UI.escapeHtml(r.TARGET_GELOMBANG)}</span>` : `<span class="badge abu">Semua</span>`}
+                                <span style="display:flex; gap:4px;">${aktif ? "" : '<span class="badge merah">Nonaktif</span>'}${r.TARGET_GELOMBANG ? `<span class="badge biru">Gel. ${UI.escapeHtml(r.TARGET_GELOMBANG)}</span>` : `<span class="badge abu">Semua</span>`}</span>
                             </div>
                             <p class="teks-lembut" style="margin:4px 0;">${UI.escapeHtml(r.ISI || "")}</p>
                             ${r.LINK_WA ? `<a href="${UI.escapeHtml(r.LINK_WA)}" target="_blank" rel="noreferrer" class="tombol teks" style="padding-left:0;">${UI.ikon("panah")} Buka Link</a>` : ""}
                             <div style="display:flex; gap:8px; margin-top:8px;">
                                 <button type="button" class="tombol teks" data-aksi-edit style="padding-left:0;">Edit</button>
-                                <button type="button" class="tombol teks" data-aksi-nonaktif style="padding-left:0; color:var(--merah);">Nonaktifkan</button>
+                                ${aktif ? '<button type="button" class="tombol teks" data-aksi-nonaktif style="padding-left:0; color:var(--merah);">Nonaktifkan</button>' : '<button type="button" class="tombol teks" data-aksi-aktifkan style="padding-left:0;">Aktifkan lagi</button>'}
                             </div>
                         </div>`;
                     }).join("")}
@@ -1116,6 +1402,19 @@
         });
     }
 
+    document.addEventListener("click", async function (e) {
+        const btn = e.target.closest && e.target.closest("[data-aksi-aktifkan]");
+        if (!btn) return;
+        const kartu = btn.closest("[data-id]");
+        btn.disabled = true;
+        try {
+            const res = await API.adminSimpanPengumuman(kartu.getAttribute("data-id"), kartu.getAttribute("data-judul"), kartu.getAttribute("data-isi"), "Ya", kartu.getAttribute("data-link"), kartu.getAttribute("data-target"));
+            if (!res.ok) throw new Error(res.pesan);
+            UI.toast("Pengumuman diaktifkan lagi.");
+            renderPengumuman();
+        } catch (err) { UI.toast(err.message || "Gagal.", "error"); btn.disabled = false; }
+    });
+
     function bukaFormPengumuman(id, judul, isi, link, targetGelombang) {
         const wadah = document.getElementById("formPengumuman");
         wadah.style.display = "block";
@@ -1123,9 +1422,10 @@
         wadah.innerHTML = `
             <div class="kartu">
                 <label style="margin-top:0;">Judul</label>
-                <input type="text" id="fJudulPengumuman" value="${UI.escapeHtml(judul)}">
-                <label>Isi</label>
-                <textarea id="fIsiPengumuman" rows="3">${UI.escapeHtml(isi)}</textarea>
+                <input type="text" id="fJudulPengumuman" maxlength="100" value="${UI.escapeHtml(judul)}">
+                <label>Isi <span class="opsional">(maks. 500 karakter, satu paragraf tanpa Enter)</span></label>
+                <textarea id="fIsiPengumuman" rows="4" maxlength="500">${UI.escapeHtml(isi)}</textarea>
+                <div class="teks-kecil" id="hitungIsi" style="text-align:right;"></div>
                 <label>Link <span class="opsional">(opsional — link apa saja: grup WA, formulir, web sekolah, dll)</span></label>
                 <input type="text" id="fLinkPengumuman" value="${UI.escapeHtml(link || "")}" placeholder="https://...">
                 <label>Ditujukan untuk <span class="opsional">(biarkan "Semua" kalau tidak perlu dipilah)</span></label>
@@ -1134,6 +1434,16 @@
                 <button type="button" class="utama blok" id="btnSimpanPengumuman" style="margin-top:10px;">Simpan</button>
             </div>
         `;
+        const taIsi = document.getElementById("fIsiPengumuman");
+        const hitung = function () { document.getElementById("hitungIsi").textContent = taIsi.value.length + " / 500"; };
+        taIsi.addEventListener("keydown", function (e) { if (e.key === "Enter") e.preventDefault(); });
+        taIsi.addEventListener("input", function () { const bersih = taIsi.value.replace(/[\r\n]+/g, " "); if (bersih !== taIsi.value) taIsi.value = bersih; hitung(); });
+        taIsi.value = taIsi.value.replace(/[\r\n]+/g, " ");
+        hitung();
+        // Pindahkan tampilan ke form supaya pengguna tahu form edit sudah terbuka.
+        wadah.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById("fJudulPengumuman").focus({ preventScroll: true });
+
         document.getElementById("btnSimpanPengumuman").addEventListener("click", async function () {
             const j = document.getElementById("fJudulPengumuman").value.trim();
             const i = document.getElementById("fIsiPengumuman").value.trim();
@@ -1142,6 +1452,7 @@
             const errorBox = document.getElementById("errorPengumuman");
             errorBox.classList.remove("tampil");
             if (!j) { errorBox.textContent = "Judul wajib diisi."; errorBox.classList.add("tampil"); return; }
+            if (i.length > 500) { errorBox.textContent = "Isi maksimal 500 karakter."; errorBox.classList.add("tampil"); return; }
             if (lk && lk.indexOf("https://") !== 0) { errorBox.textContent = "Link harus diawali https://"; errorBox.classList.add("tampil"); return; }
             const btn = document.getElementById("btnSimpanPengumuman");
             btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Menyimpan…";
