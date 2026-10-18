@@ -424,6 +424,7 @@
                     <input type="text" id="fFilterCari" value="${UI.escapeHtml(filterPendaftar.cari)}" placeholder="Ketik untuk cari instan...">
                 </div>
             </div>
+            <a class="tombol utama blok" href="daftar.html" style="margin-bottom:10px;">+ Daftarkan Pendaftar Baru (bantu isi formulir)</a>
             <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; margin:0 0 8px;"><input type="checkbox" id="fFilterPrestasi" style="width:auto;" ${filterPendaftar.prestasi ? "checked" : ""}> Hanya yang punya prestasi</label>
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                 <button type="button" id="btnUrutkan" style="padding:6px 10px; font-size:0.7rem;">${UI.ikon("jam")} ${filterPendaftar.urutan === "terbaru" ? "Terbaru Dulu" : "Terlama Dulu"}</button>
@@ -552,21 +553,14 @@
         const isiTab = document.getElementById("isiTab");
         isiTab.innerHTML = '<div class="pemuat"><div class="spinner"></div>Memuat detail pendaftar…</div>';
 
-        const kunciCache = "SPMB_CACHE_DETAIL_" + noPendaftaranDetail;
+        // DETAIL TIDAK PERNAH DI-CACHE (dokumen/pembayaran bisa berubah kapan saja
+        // oleh pendaftar -> bug lama: bukti bayar baru tidak muncul). Selalu dari server.
         let detail;
+        try { sessionStorage.removeItem("SPMB_CACHE_DETAIL_" + noPendaftaranDetail); } catch (err) { /* abaikan */ }
         try {
-            if (!paksaRefresh) {
-                try {
-                    const c = JSON.parse(sessionStorage.getItem(kunciCache) || "null");
-                    if (c && (Date.now() - c.waktuAmbil) < CACHE_DETAIL_TTL_MS) detail = c.data;
-                } catch (err) { /* abaikan, ambil dari server */ }
-            }
-            if (!detail) {
-                const res = await API.adminGetDetail(noPendaftaranDetail);
-                if (!res.ok) { isiTab.innerHTML = '<div class="pesan-error-umum tampil">' + UI.escapeHtml(res.pesan) + '</div>'; return; }
-                detail = res.data;
-                try { sessionStorage.setItem(kunciCache, JSON.stringify({ data: detail, waktuAmbil: Date.now() })); } catch (err) { /* penuh, abaikan */ }
-            }
+            const res = await API.adminGetDetail(noPendaftaranDetail);
+            if (!res.ok) { isiTab.innerHTML = '<div class="pesan-error-umum tampil">' + UI.escapeHtml(res.pesan) + '</div>'; return; }
+            detail = res.data;
         } catch (err) {
             isiTab.innerHTML = '<div class="pesan-error-umum tampil">Error jaringan: ' + UI.escapeHtml(err.message) + '</div>';
             return;
@@ -625,7 +619,7 @@
         { judul: "A. Data Calon Siswa", field: [
             ["NAMA_LENGKAP", "Nama Lengkap", "t"], ["NISN", "NISN (10 digit)", "nisn"], ["JENIS_KELAMIN", "Jenis Kelamin", "jk"],
             ["TEMPAT_LAHIR", "Tempat Lahir", "t"], ["TANGGAL_LAHIR", "Tanggal Lahir", "tgl"], ["ASAL_SEKOLAH", "Asal Sekolah", "t"],
-            ["ALAMAT", "Alamat (pemisah ; antar bagian)", "a"], ["ANAK_KE", "Anak ke-", "int"], ["JUMLAH_SAUDARA", "Jumlah Saudara", "int"],
+            ["ALAMAT", "Alamat (pemisah ; antar bagian)", "a"], ["ANAK_KE", "Anak ke-", "int"], ["JUMLAH_SAUDARA", "Jumlah Saudara", "int"], ["STATUS_DALAM_KELUARGA", "Status dalam Keluarga", "sk"],
             ["NO_HP", "No. HP (08xxxxxxxxxx)", "hp"], ["EMAIL", "Email", "em"],
         ] },
         { judul: "B. Data Ayah", field: [
@@ -672,6 +666,7 @@
         if (tipe === "a") ctrl = `<textarea rows="2" data-k="${k}">${UI.escapeHtml(v)}</textarea>`;
         else if (tipe === "jk") ctrl = pilihan(["Laki-laki", "Perempuan"], false);
         else if (tipe === "yn" || tipe === "yt") ctrl = pilihan(["Tidak", "Ya"], false);
+        else if (tipe === "sk") ctrl = pilihan(["Anak kandung", "Anak angkat", "Anak tiri", "Keluarga lainnya"], false);
         else if (tipe === "kelas") ctrl = pilihan(UI.csvKeArray(cfgPublik.KELAS_PEMINATAN_LIST), false);
         else if (tipe === "gel") ctrl = pilihan(["1", "2", "3", "Khusus"], false, !isAdmin());
         else if (tipe === "btqT") ctrl = pilihan(UI.csvKeArray(cfgPublik.BTQ_TINGKAT_BACAAN_LIST), true);
@@ -688,7 +683,12 @@
         else if (tipe === "int") ctrl = `<input type="text" inputmode="numeric" maxlength="2" data-k="${k}" data-digit="1" value="${UI.escapeHtml(v)}">`;
         else if (tipe === "em") ctrl = `<input type="email" inputmode="email" data-k="${k}" value="${UI.escapeHtml(v)}" autocomplete="off">`;
         else ctrl = `<input type="text" data-k="${k}" value="${UI.escapeHtml(v)}">`;
-        return `<div class="field"><label style="margin-top:6px; font-size:0.72rem;">${label}</label>${ctrl}</div>`;
+        // Kolom alasan pindah kelas muncul TEPAT di bawah Kelas Peminatan (bukan di
+        // ujung form) supaya tidak terlewat saat kelas diganti.
+        const blokAlasan = k === "KELAS_PEMINATAN"
+            ? `<div id="blokAlasanPindah" style="display:none;"><div class="field"><label style="margin-top:6px; font-size:0.72rem; color:var(--merah);">Alasan Pindah Kelas (wajib diisi)</label><input type="text" id="fAlasanPindah" placeholder="Mis. permintaan orang tua"></div></div>`
+            : "";
+        return `<div class="field"><label style="margin-top:6px; font-size:0.72rem;">${label}</label>${ctrl}</div>${blokAlasan}`;
     }
 
     /**
@@ -712,10 +712,9 @@
         }
         if (ada("ANAK_KE") || ada("JUMLAH_SAUDARA")) {
             const a = nilai("ANAK_KE"), j = nilai("JUMLAH_SAUDARA");
-            if (/^\d+$/.test(a) && /^\d+$/.test(j)) {
-                if (+a < 1 || +j < 1) err.push("Anak ke- dan jumlah saudara minimal 1.");
-                else if (+a > +j) err.push("Anak ke-" + a + " tidak boleh lebih besar dari jumlah saudara (" + j + ").");
-            }
+            if (ada("ANAK_KE") && !a) err.push("Anak ke- wajib diisi.");
+            if (/^\d+$/.test(a) && +a < 1) err.push("Anak ke- minimal 1.");
+            if (/^\d+$/.test(a) && /^\d+$/.test(j) && +a > +j) err.push("Anak ke-" + a + " tidak boleh lebih besar dari jumlah saudara (" + j + ").");
         }
         if ((ada("NO_HP_AYAH") || ada("NO_HP_IBU") || ada("NO_HP_WALI")) && !nilai("NO_HP_AYAH") && !nilai("NO_HP_IBU") && !nilai("NO_HP_WALI")) err.push("Minimal 1 No. HP Ayah/Ibu/Wali harus terisi.");
         return err;
@@ -920,7 +919,7 @@
         wadah.innerHTML = `
             ${BAGIAN_DATA.map(function (b) {
                 return `<div class="kartu"><div class="bagian-judul">${b.judul}</div>${b.field.map(function (f) { return inputField(p, f); }).join("")}
-                    ${b.judul.indexOf("E.") === 0 ? `<div id="blokAlasanPindah" style="display:none;"><div class="field"><label style="margin-top:6px; font-size:0.72rem;">Alasan Pindah Kelas (wajib)</label><input type="text" id="fAlasanPindah"></div></div>` : ""}
+                    
                 </div>`;
             }).join("")}
             <div class="kartu">
@@ -953,7 +952,11 @@
         });
 
         const selKelas = wadah.querySelector('[data-k="KELAS_PEMINATAN"]');
-        selKelas.addEventListener("change", function () { document.getElementById("blokAlasanPindah").style.display = selKelas.value !== (p.KELAS_PEMINATAN || "") ? "block" : "none"; });
+        selKelas.addEventListener("change", function () {
+            const beda = selKelas.value !== (p.KELAS_PEMINATAN || "");
+            document.getElementById("blokAlasanPindah").style.display = beda ? "block" : "none";
+            if (beda) document.getElementById("fAlasanPindah").focus({ preventScroll: false });
+        });
 
         // total & rata-rata otomatis per kolom nilai (2 desimal)
         function hitungNilai(kolom) {

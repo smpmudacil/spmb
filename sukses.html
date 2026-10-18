@@ -43,7 +43,11 @@
         // CONFIG (dulu berurutan -> halaman terasa lama). Halaman tampil
         // begitu CONFIG siap; login diselesaikan di latar dan ditunggu hanya
         // saat tombol dashboard / kirim survei diklik.
-        if (!API.sesiInfo().adaToken) {
+        // MODE PETUGAS: pendaftaran dibuat oleh petugas/admin dari daftar.html.
+        // JANGAN login sebagai pendaftar (akan menimpa sesi petugas) dan tidak ada survei.
+        if (akun.dibuatPetugas) {
+            loginPromise = Promise.resolve(false);
+        } else if (!API.sesiInfo().adaToken) {
             loginPromise = API.login(akun.noHp, akun.noPendaftaran, akun.pin)
                 .then(function (res) { return res && res.ok; })
                 .catch(function () { return false; });
@@ -95,12 +99,16 @@
 
             ${htmlTombolWA()}
 
-            <div style="margin-top:18px;">
-                <button type="button" class="utama blok" id="btnKeDashboard">Masuk ke Dashboard Pendaftar ${UI.ikon("panah")}</button>
+            <div style="margin-top:18px; display:grid; gap:8px;">
+                ${akun.dibuatPetugas
+                    ? `<a class="tombol utama blok" href="sekolah.html">Kembali ke Dashboard Sekolah ${UI.ikon("panah")}</a>
+                       <a class="tombol blok" href="daftar.html">Daftarkan Pendaftar Lain</a>`
+                    : `<button type="button" class="utama blok" id="btnKeDashboard">Masuk ke Dashboard Pendaftar ${UI.ikon("panah")}</button>`}
             </div>
         `;
 
-        document.getElementById("btnKeDashboard").addEventListener("click", async function (e) {
+        const btnDash = document.getElementById("btnKeDashboard");
+        if (btnDash) btnDash.addEventListener("click", async function (e) {
             const btn = e.currentTarget;
             btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Membuka dashboard…";
             const berhasil = await loginPromise;
@@ -112,7 +120,7 @@
             navigator.clipboard.writeText(teks).then(function () { UI.toast("Info akun berhasil disalin."); });
         });
 
-        if (cfgPublik.FITUR_SURVEI_AKTIF === "Ya") renderSurvei();
+        if (cfgPublik.FITUR_SURVEI_AKTIF === "Ya" && !akun.dibuatPetugas) renderSurvei();
     }
 
     function htmlTombolWA() {

@@ -29,6 +29,7 @@
     let langkahSaatIni = 0; // 0 = landing, 1..4 = step wizard
     let cfgPublik = {};
     let sedangKirim = false;
+    let modePetugas = false;
 
     // -----------------------------------------------------------------
     // BOOTSTRAP
@@ -48,9 +49,22 @@
             // Gerbang (Bagian 5): halaman ini SELALU alur pendaftar BARU,
             // jadi status "Tidak" ATAU "Offline" dua-duanya mengalihkan ke form_tutup.html.
             // (Server tetap mengulang cek ini saat submitPendaftaran — ini cuma UX.)
-            if (resStatus.data.status === "Tidak" || resStatus.data.status === "Offline") {
+            // Ya      -> terbuka untuk semua.
+            // Offline -> HANYA petugas/admin yang sedang login (membantu pendaftar langsung).
+            // Tidak   -> tidak ada yang bisa mendaftar (termasuk admin).
+            const sesi = API.sesiInfo();
+            modePetugas = !!(sesi.adaToken && (sesi.role === "petugas" || sesi.role === "admin"));
+            const st = resStatus.data.status;
+            if (st === "Tidak" || (st === "Offline" && !modePetugas)) {
                 window.location.href = "form_tutup.html";
                 return;
+            }
+            if (modePetugas) {
+                const bar = document.createElement("div");
+                bar.className = "catatan amber";
+                bar.style.margin = "0 0 10px";
+                bar.innerHTML = UI.ikon("info") + '<span><strong>Mode Petugas</strong> — Anda mendaftarkan calon siswa. Setelah kirim, berikan No. Pendaftaran &amp; PIN kepada pendaftar. <a href="sekolah.html">Kembali ke dashboard sekolah</a></span>';
+                document.getElementById("areaKonten").before(bar);
             }
 
             muatDraftDariLocalStorage();
@@ -256,7 +270,7 @@
             <div class="grup-2kolom">
                 <div class="field">
                     <label>Kabupaten/Kota</label>
-                    <input type="text" id="f_kabupaten" value="Kabupaten Cilacap" required>
+                    <input type="text" id="f_kabupaten" value="Cilacap" required>
                 </div>
                 <div class="field">
                     <label>Kode Pos</label>
@@ -266,13 +280,23 @@
 
             <div class="grup-2kolom">
                 <div class="field">
-                    <label>Anak ke-</label>
-                    <input type="text" id="f_anakKe" inputmode="numeric" maxlength="2">
+                    <label>Anak ke- <span style="color:var(--merah);">*</span></label>
+                    <input type="text" id="f_anakKe" inputmode="numeric" maxlength="2" required>
                 </div>
                 <div class="field">
                     <label>Jumlah Saudara</label>
                     <input type="text" id="f_jumlahSaudara" inputmode="numeric" maxlength="2">
                 </div>
+            </div>
+
+            <div class="field">
+                <label>Status dalam Keluarga</label>
+                <select id="f_statusKeluarga">
+                    <option value="Anak kandung" selected>Anak kandung</option>
+                    <option value="Anak angkat">Anak angkat</option>
+                    <option value="Anak tiri">Anak tiri</option>
+                    <option value="Keluarga lainnya">Keluarga lainnya</option>
+                </select>
             </div>
 
             <div class="pesan-error-umum" id="errorStep1"></div>
@@ -297,9 +321,12 @@
         if (d._tempatLahirMentah) document.getElementById("f_tempatLahir").value = d._tempatLahirMentah;
         if (d._tanggalLahirMentah) document.getElementById("f_tanggalLahir").value = d._tanggalLahirMentah;
         if (d.jalan) document.getElementById("f_jalan").value = d.jalan;
-        if (d.kabupaten) document.getElementById("f_kabupaten").value = d.kabupaten;
+        if (d.kabupaten) document.getElementById("f_kabupaten").value = (d.kabupaten === "Kabupaten Cilacap" ? "Cilacap" : d.kabupaten);
         if (d.kodePos) document.getElementById("f_kodePos").value = d.kodePos;
         if (d.anakKe) document.getElementById("f_anakKe").value = d.anakKe;
+        if (d.statusKeluarga) document.getElementById("f_statusKeluarga").value = d.statusKeluarga;
+        document.getElementById("f_anakKe").addEventListener("input", function (e) { const b = e.target.value.replace(/\D/g, ""); if (b !== e.target.value) e.target.value = b; });
+        document.getElementById("f_jumlahSaudara").addEventListener("input", function (e) { const b = e.target.value.replace(/\D/g, ""); if (b !== e.target.value) e.target.value = b; });
         if (d.jumlahSaudara) document.getElementById("f_jumlahSaudara").value = d.jumlahSaudara;
 
         // --- Asal sekolah (datalist — bisa pilih ATAU ketik bebas) ---
@@ -341,7 +368,16 @@
         // desa tetap bisa diisi bebas tanpa saran.
         inputKecamatan.addEventListener("change", function () {
             const cocok = daftarKecamatanCache.find(function (w) { return w.NAMA.toLowerCase() === inputKecamatan.value.trim().toLowerCase(); });
-            if (cocok) { muatDesa(cocok.KODE); } else { listDesa.innerHTML = ""; }
+            if (cocok) {
+                muatDesa(cocok.KODE);
+                // Kabupaten/kota ikut terisi otomatis dari induk kecamatan (kalau datanya ada di sheet).
+                if (cocok.PARENT_KODE) {
+                    API.getWilayahLokal("kabupaten", "").then(function (resKab) {
+                        const kab = ((resKab.ok && resKab.data) ? resKab.data : []).find(function (k) { return String(k.KODE) === String(cocok.PARENT_KODE); });
+                        if (kab) document.getElementById("f_kabupaten").value = kab.NAMA;
+                    }).catch(function () { /* biarkan isian manual */ });
+                }
+            } else { listDesa.innerHTML = ""; }
             inputDesa.placeholder = cocok ? "Mulai ketik…" : "Ketik nama desa/kelurahan";
         });
 
@@ -384,6 +420,9 @@
         if (!tempatLahir || !tanggalLahir) kesalahan.push("Tempat & tanggal lahir wajib diisi.");
         if (!jalan) kesalahan.push("Alamat (Jalan/RT/RW) wajib diisi.");
         if (!kabupaten) kesalahan.push("Kabupaten/Kota wajib diisi.");
+        const anakKeVal = ambil("f_anakKe"), jmlSaudaraVal = ambil("f_jumlahSaudara");
+        if (!/^\d{1,2}$/.test(anakKeVal) || parseInt(anakKeVal, 10) < 1) kesalahan.push("Anak ke- wajib diisi (angka, minimal 1).");
+        if (jmlSaudaraVal !== "" && /^\d+$/.test(anakKeVal) && parseInt(anakKeVal, 10) > parseInt(jmlSaudaraVal, 10)) kesalahan.push("Anak ke-" + anakKeVal + " tidak boleh lebih besar dari jumlah saudara (" + jmlSaudaraVal + ").");
 
         const asalSekolahFinal = ambil("f_asalSekolah");
         if (!asalSekolahFinal) kesalahan.push("Asal sekolah wajib diisi.");
@@ -424,6 +463,7 @@
             kabupaten: kabupaten,
             kodePos: kodePos,
             anakKe: ambil("f_anakKe"),
+            statusKeluarga: document.getElementById("f_statusKeluarga").value,
             jumlahSaudara: ambil("f_jumlahSaudara"),
         });
         langkahSaatIni = 2;
@@ -946,6 +986,7 @@
                 noHp: draft.noHp,
                 namaLengkap: draft.namaLengkap,
                 asalSekolah: draft.asalSekolah,
+                dibuatPetugas: modePetugas,
             }));
             hapusDraft();
             window.location.href = "sukses.html";

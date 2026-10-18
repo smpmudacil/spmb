@@ -366,6 +366,7 @@
                 <select id="f_metodeBayar"><option value="Transfer">Transfer</option><option value="Tunai">Tunai</option></select>
                 <label>Nominal (Rp)</label>
                 <input type="text" id="f_nominalBayar" inputmode="numeric" placeholder="mis. 100000">
+                <div class="teks-kecil" id="hintNominalBayar" style="margin-top:4px; min-height:1.2em;"></div>
                 <label>Bukti Transfer <span class="opsional">(wajib untuk transfer)</span></label>
                 <input type="file" id="f_fileBayar" accept=".jpg,.jpeg,.png,.pdf">
                 <div class="pesan-error-umum" id="errorBayar"></div>
@@ -382,6 +383,16 @@
             document.getElementById("btnUploadBayar").style.display = "none";
         });
 
+        // Tampilkan nominal terformat saat mengetik supaya salah ketik angka nol langsung terlihat.
+        let sudahPeringatKelebihan = false;
+        document.getElementById("f_nominalBayar").addEventListener("input", function (e) {
+            const bersih = e.target.value.replace(/\D/g, "");
+            if (bersih !== e.target.value) e.target.value = bersih;
+            sudahPeringatKelebihan = false;
+            const n = parseInt(bersih || "0", 10);
+            document.getElementById("hintNominalBayar").textContent = n ? "= " + UI.formatRupiah(n) : "";
+        });
+
         document.getElementById("btnKirimBayar").addEventListener("click", async function () {
             const jenis = document.getElementById("f_jenisBayar").value;
             const metode = document.getElementById("f_metodeBayar").value;
@@ -392,6 +403,15 @@
 
             if (!nominal) { errorBox.textContent = "Nominal wajib diisi berupa angka."; errorBox.classList.add("tampil"); return; }
             if (metode === "Transfer" && !file) { errorBox.textContent = "Bukti transfer wajib diupload."; errorBox.classList.add("tampil"); return; }
+            // PERINGATAN (tidak memblokir): nominal melebihi sisa tagihan. Server petugas tetap
+            // menolak kelebihan bayar, jadi pendaftar diminta memastikan angkanya benar dulu.
+            const sisaTagihan = (ringkasan && ringkasan.sisa) ? ringkasan.sisa : 0;
+            if (ringkasan && ringkasan.ambang > 0 && nominal > sisaTagihan && !sudahPeringatKelebihan) {
+                errorBox.innerHTML = "Nominal <strong>" + UI.formatRupiah(nominal) + "</strong> lebih besar dari sisa tagihan <strong>" + UI.formatRupiah(sisaTagihan) + "</strong>. Cek kembali angkanya. Jika transfer Anda memang sebesar itu, tekan Kirim sekali lagi lalu <strong>hubungi admin sekolah</strong> untuk konfirmasi.";
+                errorBox.classList.add("tampil");
+                sudahPeringatKelebihan = true;
+                return;
+            }
 
             const btn = document.getElementById("btnKirimBayar");
             btn.disabled = true; btn.innerHTML = UI.ikon("spinner") + " Mengirim…";
@@ -623,7 +643,7 @@
             ["Data Calon Siswa", [
                 ["Nama Lengkap", p.NAMA_LENGKAP], ["NISN", p.NISN], ["Jenis Kelamin", p.JENIS_KELAMIN],
                 ["Tempat, Tanggal Lahir", p.TEMPAT_TGL_LAHIR], ["Asal Sekolah", p.ASAL_SEKOLAH], ["Alamat", UI.tampilAlamat(p.ALAMAT)],
-                ["Anak ke-", p.ANAK_KE], ["Jumlah Saudara", p.JUMLAH_SAUDARA], ["No. HP", p.NO_HP], ["Email", p.EMAIL],
+                ["Anak ke-", p.ANAK_KE], ["Jumlah Saudara", p.JUMLAH_SAUDARA], ["Status dalam Keluarga", p.STATUS_DALAM_KELUARGA || "Anak kandung"], ["No. HP", p.NO_HP], ["Email", p.EMAIL],
             ]],
             ["Data Ayah", [
                 ["Nama", p.NAMA_AYAH], ["Pekerjaan", p.PEKERJAAN_AYAH], ["No. HP", p.NO_HP_AYAH], ["Alamat", UI.tampilAlamat(p.ALAMAT_AYAH)],
