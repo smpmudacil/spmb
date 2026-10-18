@@ -480,6 +480,7 @@
         if (!semuaPendaftarMemori) return;
         let rows = semuaPendaftarMemori;
         if (filterPendaftar.status) rows = rows.filter(function (r) { return r.STATUS_PENDAFTARAN === filterPendaftar.status; });
+        if (filterPendaftar.prestasi) rows = rows.filter(function (r) { return String(r.PRESTASI || "").trim() !== ""; });
         if (filterPendaftar.cari) {
             const q = filterPendaftar.cari;
             rows = rows.filter(function (r) {
