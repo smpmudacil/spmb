@@ -449,9 +449,13 @@ const API = (() => {
 
     async function submitPendaftaran(dataPendaftar) {
         const submissionId = _generateUUID();
+        // Saat status "Offline", server hanya menerima submit dari petugas/admin:
+        // sertakan token sesi (bila ada) supaya server bisa memverifikasi perannya.
+        const token = _getToken();
         return _post({
             action: "submitPendaftaran",
             submissionId,
+            ...(token ? { token } : {}),
             ...dataPendaftar,
         }, false, true);
     }
