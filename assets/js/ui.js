@@ -22,6 +22,16 @@ const UI = (() => {
         unggah: `<svg ${_svgAtribut}><path d="M12 16V4"></path><polyline points="7 9 12 4 17 9"></polyline><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path></svg>`,
         salin: `<svg ${_svgAtribut}><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M4 15V5a2 2 0 0 1 2-2h10"></path></svg>`,
         keluar: `<svg ${_svgAtribut}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>`,
+        dompet: `<svg ${_svgAtribut}><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path></svg>`,
+        dokumen: `<svg ${_svgAtribut}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="14" y2="17"></line></svg>`,
+        orang: `<svg ${_svgAtribut}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`,
+        papanNilai: `<svg ${_svgAtribut}><rect x="8" y="2" width="8" height="4" rx="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><polyline points="9 14 11 16 15 12"></polyline></svg>`,
+        beranda: `<svg ${_svgAtribut}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>`,
+        kelompok: `<svg ${_svgAtribut}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`,
+        piala: `<svg ${_svgAtribut}><circle cx="12" cy="8" r="7"></circle><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"></polyline></svg>`,
+        pensil: `<svg ${_svgAtribut}><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>`,
+        pengeras: `<svg ${_svgAtribut}><path d="M3 11l18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>`,
+        pengaturan: `<svg ${_svgAtribut}><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`,
         jam: `<svg ${_svgAtribut}><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>`,
         lonceng: `<svg ${_svgAtribut}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>`,
         perisai: `<svg ${_svgAtribut}><path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5z"></path></svg>`,
@@ -216,6 +226,12 @@ const UI = (() => {
             + '</div>';
     }
 
+    /** Kotak "Petunjuk Langkah Selanjutnya" untuk Bukti Pendaftaran (dipakai dashboard pendaftar & sekolah). */
+    function htmlLangkahSelanjutnya() {
+        return '<div class="langkah"><div class="langkah-judul">Petunjuk Langkah Selanjutnya</div>'
+            + '<div class="langkah-isi"><strong>Segera lakukan daftar ulang.</strong> Lengkapi unggah dokumen persyaratan dan pembayaran melalui dashboard pendaftar, atau hubungi admin sekolah bila ada kendala.</div></div>';
+    }
+
     /** Alamat tersimpan memakai ";" sebagai pemisah (Master Context 6.7); ke pengguna ditampilkan dengan koma. */
     function tampilAlamat(teks) {
         return String(teks || "").split(";").map(function (x) { return x.trim(); }).filter(Boolean).join(", ");
@@ -265,6 +281,9 @@ const UI = (() => {
                 tr:last-child td { border-bottom: none; }
                 td:first-child { color: #1d6e4a; width: 42%; font-weight: 700; background: #e1f2e9; }
                 td:last-child { font-weight: 700; color: #16201a; }
+                .langkah { margin-top: 18px; border: 2px solid #f0c36d; background: #fff8e6; border-radius: 10px; padding: 12px 14px; }
+                .langkah-judul { font-size: 0.8rem; font-weight: 800; color: #9a6a00; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 4px; }
+                .langkah-isi { font-size: 0.92rem; color: #4a3a10; line-height: 1.5; }
                 .nama-besar { text-align: center; font-size: 1.3rem; font-weight: 800; color: #1d6e4a; background: #f1faf5; border: 2px dashed #8fcaa9; border-radius: 10px; padding: 12px; margin-bottom: 16px; }
                 .cap { margin-top: 28px; font-size: 0.72rem; color: #8a9790; text-align: center; }
                 @media print { body { padding: 0; } }
@@ -305,5 +324,5 @@ const UI = (() => {
         });
     }
 
-    return { ikon, toast, escapeHtml, formatRupiah, csvKeArray, formatTanggal, linkWA, isiTemplate, bukaFile, cetakHalaman, salin, uraikanRekening, htmlRekening, tampilAlamat, pasangToggleSandi };
+    return { ikon, toast, escapeHtml, formatRupiah, csvKeArray, formatTanggal, linkWA, isiTemplate, bukaFile, cetakHalaman, salin, uraikanRekening, htmlRekening, tampilAlamat, htmlLangkahSelanjutnya, pasangToggleSandi };
 })();
