@@ -124,12 +124,12 @@
             </div>
 
             <div style="padding:0 16px;">
-                <div class="tab-bar" style="--kolom-tab:5;">
+                <div class="tab-bar">
                     <button type="button" class="tab-btn" data-tab="status">${UI.ikon("jam")}<span>Status</span></button>
-                    <button type="button" class="tab-btn" data-tab="pembayaran">${UI.ikon("dompet")}<span>Bayar</span></button>
-                    <button type="button" class="tab-btn" data-tab="dokumen">${UI.ikon("dokumen")}<span>Dokumen</span></button>
-                    <button type="button" class="tab-btn" data-tab="data">${UI.ikon("orang")}<span>Data Saya</span></button>
-                    <button type="button" class="tab-btn" data-tab="nilai">${UI.ikon("papanNilai")}<span>Nilai</span></button>
+                    <button type="button" class="tab-btn" data-tab="pembayaran">${UI.ikon("info")}<span>Bayar</span></button>
+                    <button type="button" class="tab-btn" data-tab="dokumen">${UI.ikon("unggah")}<span>Dokumen</span></button>
+                    <button type="button" class="tab-btn" data-tab="data">${UI.ikon("kunci")}<span>Data Saya</span></button>
+                    <button type="button" class="tab-btn" data-tab="nilai">${UI.ikon("info")}<span>Nilai</span></button>
                 </div>
                 <div id="isiTab"></div>
             </div>
@@ -619,8 +619,7 @@
             return vals.length + " nilai — Jumlah: " + tot.toFixed(2) + " — Rata-rata: " + (tot / vals.length).toFixed(2);
         }
         const baris = [
-            ["NISN", p.NISN], ["Nomor Pendaftaran", p.NO_PENDAFTARAN], ["Jenis Kelamin", p.JENIS_KELAMIN], ["Tempat, Tanggal Lahir", p.TEMPAT_TGL_LAHIR],
-            ["No. HP", p.NO_HP], ["Alamat", UI.tampilAlamat(p.ALAMAT)],
+            ["NISN", p.NISN], ["Nomor Pendaftaran", p.NO_PENDAFTARAN], ["Tempat, Tanggal Lahir", p.TEMPAT_TGL_LAHIR],
             ["Asal Sekolah", p.ASAL_SEKOLAH], ["Kelas Peminatan", p.KELAS_PEMINATAN],
             ["Boarding", p.BOARDING === "Ya" ? "Ya" : "Tidak"],
             ["Nilai Rapor", statNilai(p.NILAI_MAPEL_RAPOR)], ["Nilai TKA", statNilai(p.NILAI_MAPEL_TKA)],
@@ -628,7 +627,7 @@
         UI.cetakHalaman(
             "Bukti Pendaftaran - " + p.NAMA_LENGKAP,
             `<div class="nama-besar">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
-            <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>` + UI.htmlLangkahSelanjutnya(),
+            <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>`,
             { judulDok: "BUKTI PENDAFTARAN", subJudul1: "SPMB TA " + (cfgPublik.TAHUN_AJARAN || "-"), subJudul2: (cfgPublik.NAMA_SEKOLAH || "").toUpperCase() }
         );
     }
