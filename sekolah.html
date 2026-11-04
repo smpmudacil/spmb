@@ -93,13 +93,13 @@
     function render() {
         const area = document.getElementById("areaKonten");
         const tabs = [
-            ["beranda", "jam", "Beranda"],
-            ["pendaftar", "info", "Data Pendaftar"],
-            ["prestasi", "cek", "Prestasi"],
-            ["pengajuan", "info", "Pengajuan"],
-            ["pengumuman", "unggah", "Pengumuman"],
+            ["beranda", "beranda", "Beranda"],
+            ["pendaftar", "kelompok", "Pendaftar"],
+            ["prestasi", "piala", "Prestasi"],
+            ["pengajuan", "pensil", "Pengajuan"],
+            ["pengumuman", "pengeras", "Info"],
         ];
-        if (isAdmin()) tabs.push(["pengaturan", "kunci", "Pengaturan"]);
+        if (isAdmin()) tabs.push(["pengaturan", "pengaturan", "Atur"]);
 
         area.innerHTML = `
             <div style="padding:16px 16px 0;">
@@ -114,7 +114,7 @@
                 </div>
             </div>
             <div style="padding:0 16px 16px;">
-                <div class="tab-bar" style="grid-template-columns: repeat(${tabs.length}, 1fr);">
+                <div class="tab-bar" style="--kolom-tab:${tabs.length};">
                     ${tabs.map(function (t) { return `<button type="button" class="tab-btn" data-tab="${t[0]}">${UI.ikon(t[1])}<span>${t[2]}</span></button>`; }).join("")}
                 </div>
                 <div id="isiTab"></div>
@@ -480,6 +480,7 @@
         if (!semuaPendaftarMemori) return;
         let rows = semuaPendaftarMemori;
         if (filterPendaftar.status) rows = rows.filter(function (r) { return r.STATUS_PENDAFTARAN === filterPendaftar.status; });
+        if (filterPendaftar.prestasi) rows = rows.filter(function (r) { return String(r.PRESTASI || "").trim() !== ""; });
         if (filterPendaftar.cari) {
             const q = filterPendaftar.cari;
             rows = rows.filter(function (r) {
@@ -900,7 +901,7 @@
             return vals.length + " nilai, total " + tot.toFixed(2) + ", rata-rata " + (tot / vals.length).toFixed(2);
         }
         const baris = [
-            ["NISN", p.NISN], ["No. Pendaftaran", p.NO_PENDAFTARAN], ["Tempat, Tanggal Lahir", p.TEMPAT_TGL_LAHIR],
+            ["NISN", p.NISN], ["No. Pendaftaran", p.NO_PENDAFTARAN], ["Jenis Kelamin", p.JENIS_KELAMIN], ["Tempat, Tanggal Lahir", p.TEMPAT_TGL_LAHIR],
             ["Asal Sekolah", p.ASAL_SEKOLAH], ["Status", labelStatus(p.STATUS_PENDAFTARAN)],
             ["Kelas Peminatan", p.KELAS_PEMINATAN], ["Program", p.BOARDING === "Ya" ? "Boarding" : "Non-Boarding"], ["Gelombang", p.GELOMBANG],
             ["Nilai Rapor", statNilai(p.NILAI_MAPEL_RAPOR)], ["Nilai TKA", statNilai(p.NILAI_MAPEL_TKA)],
@@ -909,7 +910,7 @@
         UI.cetakHalaman(
             "Info Pendaftar - " + p.NAMA_LENGKAP,
             `<div class="nama-besar">${UI.escapeHtml(p.NAMA_LENGKAP)}</div>
-            <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>`,
+            <table>${baris.map(function (b) { return `<tr><td>${UI.escapeHtml(b[0])}</td><td>${UI.escapeHtml(b[1] == null || b[1] === "" ? "-" : String(b[1]))}</td></tr>`; }).join("")}</table>` + UI.htmlLangkahSelanjutnya(),
             { judulDok: "INFO PENDAFTAR", subJudul1: "SPMB TA " + (cfgPublik.TAHUN_AJARAN || "-"), subJudul2: (cfgPublik.NAMA_SEKOLAH || "").toUpperCase() }
         );
     }
